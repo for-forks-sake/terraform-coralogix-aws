@@ -19,9 +19,24 @@ module "cloudwatch_firehose_logs_coralogix" {
 }
 ```
 
+### Secrets Manager API key
+
+Optionally pass `api_key_secret_arn` instead of `api_key` so Firehose fetches the key at runtime via `SecretsManagerConfiguration`. The secret value must be JSON: `{"api_key": "..."}`. Rotating the secret then takes effect without a Terraform apply. If the secret is encrypted with a customer managed KMS key, also set `api_key_secret_kms_key_arn`. When the module creates the Firehose IAM role, it grants `secretsmanager:GetSecretValue` (and `kms:Decrypt` when a CMK ARN is set). If you pass `existing_firehose_iam`, that role must already allow those actions.
+
+```terraform
+module "cloudwatch_firehose_logs_coralogix" {
+  source              = "coralogix/aws/coralogix//modules/firehose-logs"
+  firehose_stream     = var.coralogix_firehose_stream_name
+  api_key_secret_arn  = var.api_key_secret_arn
+  coralogix_region    = var.coralogix_region
+  integration_type_logs = "Default"
+  source_type_logs      = "DirectPut"
+}
+```
+
 ### Dynamic Values Table for Logs
 
-For `application_name` and/or `subsystem_name` to be set dynamically in relation to their `integrationType`'s resource fields (e.g. CloudWatch_JSON's loggroup name, EksFargate's k8s namespace). The source's `var` has to be mapped as a string literal to the `integrationType`'s as a DyanamicFromFrield with pre-defined values:
+For `application_name` and/or `subsystem_name` to be set dynamically in relation to their `integrationType`'s resource fields (e.g. CloudWatch_JSON's loggroup name, EksFargate's k8s namespace). The source's `var` has to be mapped as a string literal to the `integrationType`'s as a DynamicFromField with pre-defined values:
 
 | Field | Source `var` | Expected String Literal | Integration Type | Notes |
 |-------|--------------|-------------------------|------------------|-------|
@@ -41,11 +56,11 @@ For more information - visit [Kinesis Data Firehose - Logs](https://coralogix.co
 ### Examples
 Examples can be found under the [firehose-logs examples directory](https://github.com/coralogix/terraform-coralogix-aws/tree/master/examples/firehose-logs)
 
-## Override Coralogix applicationName and subsystemName
+## Override Coralogix `applicationName` and `subsystemName`
 The application name and subsystem name by default is the firehose delivery stream arn and name, but it can be overriden by setting an environment variable called `application_name` and `subsystem_name`. 
 
-# Coralogix account region
-The coralogix region variable accepts one of the following regions:
+## Coralogix account region
+The Coralogix region variable accepts one of the following regions:
 * EU1
 * EU2
 * AP1
@@ -54,7 +69,7 @@ The coralogix region variable accepts one of the following regions:
 * US1
 * US2
 
-### Coralogix Regions & Description. 
+### Coralogix regions and endpoints
 
 | Region    | Domain                 |  Endpoint                                          |
 |-----------|------------------------|----------------------------------------------------|
@@ -67,7 +82,7 @@ The coralogix region variable accepts one of the following regions:
 | US2       | `us2.coralogix.com`  | `https://ingress.us2.coralogix.com/aws/firehose` |
 
 ### Custom Domain
-It is possible to pass a custom coralogix domain by using the `custom_domain` variable.
+It is possible to pass a custom Coralogix domain by using the `custom_domain` variable.
 
 <!-- BEGIN_TF_DOCS -->
 ## Requirements
@@ -75,7 +90,7 @@ It is possible to pass a custom coralogix domain by using the `custom_domain` va
 | Name | Version |
 |------|---------|
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 4.17.1 |
-| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.6.0 |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.9.0 |
 
 ## Providers
 
@@ -105,8 +120,9 @@ It is possible to pass a custom coralogix domain by using the `custom_domain` va
 | <a name="input_user_supplied_tags"></a> [user_supplied_tags](#input\_user_supplied_tags) | Tags supplied by the user to populate to all generated resources | `map(string)` | n/a | no |
 | <a name="input_override_default_tags"></a> [override_default_tags](#input\_override_default_tags) | Override and remove the default tags by setting to true | `bool` | `false` | no |
 | <a name="s3_enable_secure_transport"></a> [s3\_enable\_secure\_transport](variables.tf#L105) | Disable if you dont want bucket policy that complies with s3-bucket-ssl-requests-only rule | `bool` | `true` | no |
+| <a name="content_encoding"></a> [content\_encoding](variables.tf#L129) | Set encoding of data in firehose to GZIP or NONE | `string` | `GZIP` | no |
 
-## Coralgoix regions
+## Region name mapping
 
 | Coralogix region | AWS Region | Coralogix Domain |
 |------------------|------------|------------------|

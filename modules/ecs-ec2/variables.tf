@@ -4,41 +4,109 @@ variable "ecs_cluster_name" {
 }
 
 variable "config_source" {
-  description = "Select the configuration source for OpenTelemetry Collector. Options: 'template' (default), 's3', 'parameter-store'"
+  description = "Reserved for UI compatibility. Keep this set to 's3'. Supervised mode uses embedded configs when S3 paths are omitted."
   type        = string
-  default     = "template"
+  default     = "s3"
   validation {
-    condition     = contains(["template", "s3", "parameter-store"], var.config_source)
-    error_message = "Config source must be one of: template, s3, parameter-store."
+    condition     = var.config_source == "s3"
+    error_message = "config_source must be 's3'. Use config from Coralogix UI or the integration chart."
   }
 }
 
-variable "s3_config_bucket" {
-  description = "S3 bucket name containing the configuration file. Required when config_source is 's3'."
-  type        = string
-  default     = null
+variable "supervisor_enabled" {
+  description = "Whether to run the Collector through the Supervisor. When enabled, the supervised CDOT image and embedded configs are used unless S3 paths are provided."
+  type        = bool
+  default     = false
 }
 
-variable "s3_config_key" {
-  description = "S3 object key (file path) for the configuration file. Required when config_source is 's3'."
+variable "s3_config_bucket" {
+  description = "S3 bucket containing collector and optional Supervisor configurations. Required in collector mode and when initial_fallback_configs or profiling_initial_fallback_configs is set. In supervised mode, omit it to use embedded configs. Ignored in service-only mode."
   type        = string
   default     = null
 
   validation {
-    condition     = (var.config_source == "s3") ? (var.s3_config_bucket != null && var.s3_config_key != null) : true
-    error_message = "Both s3_config_bucket and s3_config_key must be provided when config_source is 's3'."
+    condition     = var.task_definition_arn != null || var.supervisor_enabled || try(trimspace(var.s3_config_bucket) != "", false)
+    error_message = "s3_config_bucket is required in collector mode when the module creates the task definition."
+  }
+}
+
+variable "s3_config_key" {
+  description = "S3 object key for the collector configuration. Required in collector mode. In supervised mode, omit it to use the embedded collector config. Ignored in service-only mode."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.task_definition_arn != null || var.supervisor_enabled || try(trimspace(var.s3_config_key) != "", false)
+    error_message = "s3_config_key is required in collector mode when the module creates the task definition."
+  }
+}
+
+variable "s3_supervisor_config_key" {
+  description = "Optional S3 object key for the Supervisor configuration. Used only in supervised mode when s3_config_bucket is also set. When omitted, the embedded Supervisor config is used."
+  type        = string
+  default     = null
+}
+
+variable "initial_fallback_configs" {
+  description = "Initial Supervisor fallback configuration URLs for the collector agent (full s3:// object paths). Applied only to the embedded Supervisor config; an S3-provided Supervisor config is used as-is. Requires s3_config_bucket when non-empty so the auto-created task role can read those objects. Ignored in service-only mode."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.initial_fallback_configs) == 0 || var.task_definition_arn != null || var.supervisor_enabled
+    error_message = "initial_fallback_configs requires supervisor_enabled = true when the module creates the task definition."
+  }
+
+  validation {
+    condition     = length(var.initial_fallback_configs) == 0 || var.task_definition_arn != null || try(trimspace(var.s3_config_bucket) != "", false)
+    error_message = "s3_config_bucket is required when initial_fallback_configs is set."
+  }
+
+  validation {
+    condition = alltrue([
+      for url in var.initial_fallback_configs : can(regex("^s3://.+", trimspace(url)))
+    ])
+    error_message = "Each initial_fallback_configs entry must be a non-empty s3:// URL."
   }
 }
 
 variable "image_version" {
-  description = "The Coralogix Open Telemetry Distribution Image Version/Tag. See: https://hub.docker.com/r/coralogixrepo/coralogix-otel-collector/tags"
+  description = "The standard CDOT image version used in collector mode. Required in collector mode when the module creates the task definition."
   type        = string
+  default     = null
+
+  validation {
+    condition     = var.task_definition_arn != null || var.supervisor_enabled || try(trimspace(var.image_version) != "", false)
+    error_message = "image_version is required in collector mode when the module creates the task definition."
+  }
 }
 
 variable "image" {
-  description = "The OpenTelemetry Collector Image to use. Should accept default unless advised by Coralogix support."
+  description = "The OpenTelemetry Collector image used in collector mode. Keep the default unless advised by Coralogix support."
   type        = string
   default     = "coralogixrepo/coralogix-otel-collector"
+}
+
+variable "supervised_image_repository" {
+  description = "The supervised CDOT image repository used in supervised mode."
+  type        = string
+  default     = "cgx.jfrog.io/coralogix-docker-images/coralogix-otel-supervised-cdot"
+
+  validation {
+    condition     = trimspace(var.supervised_image_repository) != ""
+    error_message = "supervised_image_repository must not be empty."
+  }
+}
+
+variable "supervised_image_version" {
+  description = "The supervised CDOT image version used in supervised mode. Use v0.11.0 or later when profiling_enabled is true and initial fallback configurations are set."
+  type        = string
+  default     = "v0.11.0"
+
+  validation {
+    condition     = trimspace(var.supervised_image_version) != ""
+    error_message = "supervised_image_version must not be empty."
+  }
 }
 
 variable "memory" {
@@ -47,12 +115,84 @@ variable "memory" {
   default     = 256
 }
 
-variable "coralogix_region" {
-  description = "The region of the Coralogix endpoint domain: [EU1|EU2|AP1|AP2|AP3|US1|US2|custom]. If \"custom\" then __custom_domain__ parameter must be specified."
-  type        = string
+variable "profiling_enabled" {
+  description = "Enable a separate profiling collector daemon service. Follows supervisor_enabled for collector vs supervised mode. Not supported in service-only mode."
+  type        = bool
+  default     = false
+
   validation {
-    condition     = can(regex("^(EU1|EU2|AP1|AP2|AP3|US1|US2|custom)$", var.coralogix_region))
-    error_message = "Must be one of [EU1|EU2|AP1|AP2|AP3|US1|US2|custom]."
+    condition     = !var.profiling_enabled || var.task_definition_arn == null
+    error_message = "profiling_enabled cannot be used with task_definition_arn. Service-only mode manages only the main ECS service."
+  }
+}
+
+variable "profiling_s3_config_bucket" {
+  description = "S3 bucket containing the profiling collector configuration. Required when profiling is enabled in collector mode. Optional override in supervised mode. Must be set together with profiling_s3_config_key."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = !var.profiling_enabled || var.supervisor_enabled || try(trimspace(var.profiling_s3_config_bucket) != "", false)
+    error_message = "profiling_s3_config_bucket is required when profiling is enabled in collector mode."
+  }
+
+  validation {
+    condition = (
+      try(trimspace(var.profiling_s3_config_bucket) != "", false) ==
+      try(trimspace(var.profiling_s3_config_key) != "", false)
+    )
+    error_message = "profiling_s3_config_bucket and profiling_s3_config_key must both be set or both be null."
+  }
+}
+
+variable "profiling_s3_config_key" {
+  description = "S3 object key for the profiling collector configuration. Required when profiling is enabled in collector mode. Optional override in supervised mode. Must be set together with profiling_s3_config_bucket."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = !var.profiling_enabled || var.supervisor_enabled || try(trimspace(var.profiling_s3_config_key) != "", false)
+    error_message = "profiling_s3_config_key is required when profiling is enabled in collector mode."
+  }
+}
+
+variable "profiling_initial_fallback_configs" {
+  description = "Initial Supervisor fallback configuration URLs for the profiling agent (full s3:// object paths). Applied only to the embedded profiling Supervisor config. Requires s3_config_bucket when non-empty. Ignored when profiling is disabled or in service-only mode."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = length(var.profiling_initial_fallback_configs) == 0 || var.task_definition_arn != null || (var.profiling_enabled && var.supervisor_enabled)
+    error_message = "profiling_initial_fallback_configs requires profiling_enabled = true and supervisor_enabled = true when the module creates the task definition."
+  }
+
+  validation {
+    condition     = length(var.profiling_initial_fallback_configs) == 0 || var.task_definition_arn != null || try(trimspace(var.s3_config_bucket) != "", false)
+    error_message = "s3_config_bucket is required when profiling_initial_fallback_configs is set."
+  }
+
+  validation {
+    condition = alltrue([
+      for url in var.profiling_initial_fallback_configs : can(regex("^s3://.+", trimspace(url)))
+    ])
+    error_message = "Each profiling_initial_fallback_configs entry must be a non-empty s3:// URL."
+  }
+}
+
+variable "profiling_memory" {
+  description = "The amount of memory (in MiB) used by the profiling task."
+  type        = number
+  default     = 512
+}
+
+variable "coralogix_region" {
+  description = "The region of the Coralogix endpoint domain: [EU1|EU2|AP1|AP2|AP3|US1|US2|custom]. Required when module creates the task definition. Ignored in service-only mode."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.task_definition_arn != null || (var.coralogix_region != null && can(regex("^(EU1|EU2|AP1|AP2|AP3|US1|US2|custom)$", var.coralogix_region)))
+    error_message = "coralogix_region is required when task_definition_arn is null. Must be one of [EU1|EU2|AP1|AP2|AP3|US1|US2|custom]."
   }
 }
 
@@ -60,24 +200,6 @@ variable "custom_domain" {
   description = "[Optional] Coralogix custom domain, e.g. \"private.coralogix.com\" Private Link domain. If specified, overrides the public domain corresponding to the __coralogix_region__ parameter."
   type        = string
   default     = null
-}
-
-variable "default_application_name" {
-  description = "The default Coralogix Application name."
-  type        = string
-  validation {
-    condition     = length(var.default_application_name) >= 1 && length(var.default_application_name) <= 64
-    error_message = "The Default Application Name length should be within 1 and 64 characters"
-  }
-}
-
-variable "default_subsystem_name" {
-  description = "The default Coralogix Subsystem name."
-  type        = string
-  validation {
-    condition     = length(var.default_subsystem_name) >= 1 && length(var.default_subsystem_name) <= 64
-    error_message = "The Default Subsystem Name length should be within 1 and 64 characters"
-  }
 }
 
 variable "use_api_key_secret" {
@@ -93,8 +215,8 @@ variable "api_key" {
   default     = null
 
   validation {
-    condition     = var.use_api_key_secret ? var.api_key == null : var.api_key != null
-    error_message = "Check api_key variable. It must be provided unless use_api_key_secret is true."
+    condition     = var.task_definition_arn != null || (var.use_api_key_secret ? var.api_key == null : var.api_key != null)
+    error_message = "api_key must be provided unless use_api_key_secret is true (when module creates the task definition)."
   }
 }
 
@@ -104,47 +226,41 @@ variable "api_key_secret_arn" {
   default     = null
 
   validation {
-    condition     = var.use_api_key_secret ? var.api_key_secret_arn != null : var.api_key_secret_arn == null
-    error_message = "Check api_key_secret_arn variable. If use_api_key_secret is true, it must be populated. If not, it must be null"
+    condition     = var.task_definition_arn != null || (var.use_api_key_secret ? var.api_key_secret_arn != null : var.api_key_secret_arn == null)
+    error_message = "api_key_secret_arn must be set when use_api_key_secret is true (when module creates the task definition)."
   }
 }
 
-variable "use_custom_config_parameter_store" {
-  description = "Whether to use a custom configuration from a Parameter Store"
-  type        = bool
-  default     = false
-}
-
-variable "custom_config_parameter_store_name" {
-  description = "Name of the Parameter Store parameter containing the OTEL configuration. Required when config_source is 'parameter-store'"
+variable "api_key_secret_kms_key_arn" {
+  description = "KMS key ARN used to encrypt the Secrets Manager secret. When set, the module skips DescribeSecret/DescribeKey lookups—use this when the deploy role cannot access secret metadata (e.g. restricted IAM). Omit when the secret uses the default aws/secretsmanager key."
   type        = string
   default     = null
 
   validation {
-    condition     = (var.config_source == "parameter-store") ? var.custom_config_parameter_store_name != null : true
-    error_message = "custom_config_parameter_store_name must be provided when config_source is 'parameter-store'."
-  }
-}
-
-variable "otel_config_file" {
-  type        = string
-  description = "File path to a custom opentelemetry configuration file. Defaults to an embedded configuration."
-  default     = null
-
-  validation {
-    condition     = (var.config_source == "parameter-store" || var.config_source == "s3") ? var.otel_config_file == null : true
-    error_message = "otel_config_file must be null when using parameter-store or s3 configuration sources."
+    condition     = var.api_key_secret_kms_key_arn == null || var.api_key_secret_kms_key_arn != ""
+    error_message = "api_key_secret_kms_key_arn must be null or a non-empty KMS key ARN."
   }
 }
 
 variable "task_execution_role_arn" {
-  description = "ARN of the task execution role that the Amazon ECS container agent and the Docker daemon can assume. When using S3 configuration, if not provided, an auto-created role with S3 read permissions will be used."
+  description = "ARN of the task execution role. When not provided and the module creates the task definition, an auto-created role with the standard ECS execution policy and optional Secrets Manager access is used. In service-only mode, this must be null."
   type        = string
   default     = null
 
   validation {
-    condition     = (var.use_api_key_secret == true || var.config_source == "parameter-store") ? var.task_execution_role_arn != null : true
-    error_message = "task_execution_role_arn must be provided if using API Key Secret or Parameter Store config"
+    condition     = var.task_definition_arn == null || var.task_execution_role_arn == null
+    error_message = "In service-only mode (task_definition_arn set), task_execution_role_arn must be null. Roles are defined on the task definition; the service does not accept role ARNs. Set task_execution_role_arn = null explicitly."
+  }
+}
+
+variable "task_role_arn" {
+  description = "ARN of the task role that the containers can assume. When this is not provided, the module creates a role with S3 read permissions. In service-only mode, this must be null."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.task_definition_arn == null || var.task_role_arn == null
+    error_message = "In service-only mode (task_definition_arn set), task_role_arn must be null. Roles are defined on the task definition; the service does not accept role ARNs. Set task_role_arn = null explicitly."
   }
 }
 
@@ -156,50 +272,12 @@ variable "tags" {
 
 variable "task_definition_arn" {
   type        = string
-  description = "Existing Coralogix OTEL task definition ARN"
+  description = "Existing Coralogix OTEL task definition ARN. When set, the module operates in service-only mode: it creates only the ECS service and does not manage config, command, or IAM. S3 inputs are ignored; task_execution_role_arn and task_role_arn must be null."
   default     = null
 }
 
-variable "enable_head_sampler" {
-  description = "Enable or disable head sampling for traces. When enabled, sampling decisions are made at the collection point before any processing occurs."
-  type        = bool
-  default     = true
-}
-
-variable "sampling_percentage" {
-  description = "The percentage of traces to sample (0-100). A value of 100 means all traces will be sampled."
-  type        = number
-  default     = 10
-  validation {
-    condition     = var.sampling_percentage >= 0 && var.sampling_percentage <= 100
-    error_message = "Sampling percentage must be between 0 and 100."
-  }
-}
-
-variable "sampler_mode" {
-  description = "The sampling mode to use (proportional, equalizing, or hash_seed)."
-  type        = string
-  default     = "proportional"
-  validation {
-    condition     = contains(["proportional", "equalizing", "hash_seed"], var.sampler_mode)
-    error_message = "Sampler mode must be one of: proportional, equalizing, hash_seed."
-  }
-}
-
-variable "enable_span_metrics" {
-  description = "Enable or disable the spanmetrics processor and pipeline. When enabled (default), span metrics will be generated from traces."
-  type        = bool
-  default     = true
-}
-
-variable "enable_traces_db" {
-  description = "Enable or disable the traces/db pipeline for database operation metrics. When enabled, database operation metrics will be generated. Note: This feature requires spanmetrics to be enabled."
-  type        = bool
-  default     = false
-}
-
 variable "health_check_enabled" {
-  description = "Enable ECS container health check for the OTEL agent container, Requires OTEL collector image version v0.4.2 or later."
+  description = "Enable ECS container health check for the OTEL agent container. Requires OTEL collector image version v0.4.2 or later."
   type        = bool
   default     = false
 }

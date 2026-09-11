@@ -58,6 +58,7 @@ It's recommended to use this module for:
 | <a name="input_source_regions"></a> [source_regions](#input\_source\_regions) | The regions to collect metadata from, separated by commas (e.g. eu-north-1,eu-west-1,us-east-1). Leave empty if you want to collect metadata from the current region only. | `list(string)` | n/a | no |
 | <a name="input_crossaccount_mode"></a> [crossaccount_mode](#input\_crossaccount\_mode) | The mode to collect metadata from multiple accounts[Disabled, StaticIAM, Config]. Leave Disabled if you want to collect metadata from the current account only. | `string` | `Disabled` | no |
 | <a name="input_crossaccount_config_aggregator"></a> [crossaccount_config_aggregator](#input\_crossaccount\_config\_aggregator) | The name of the AWS Config Aggregator to run the query. Used if `CrossAccountMode` is set to `Config`. | `string` | n/a | no |
+| <a name="input_crossaccount_config_assume_role"></a> [crossaccount_config_assume_role](#input\_crossaccount\_config\_assume\_role) | IAM role ARN in the account where AWS Config aggregator lives. If set, the collector will assume this role when querying Config (use when aggregator is in a different account). | `string` | `""` | no |
 | <a name="input_crossaccount_account_ids"></a> [crossaccount_account_ids](#input\_crossaccount\_account\_ids) | The list of account IDs, separated by comma. Used if `CrossAccountMode` is set to `StaticIAM`. | `list(string)` | n/a | no |
 | <a name="input_crossaccount_iam_role_name"></a> [crossaccount_iam_role_name](#input\_crossaccount\_iam\_role\_name) | The name of the IAM cross-account roles set in each source account. Used if `CrossAccountMode` is not `Disabled`. | `string` | n/a | no |
 
@@ -84,6 +85,7 @@ It's recommended to use this module for:
 | <a name="input_timeout"></a> [timeout](#input\_timeout) | Lambda function timeout limit | `number` | `300` | no |
 | <a name="input_architecture"></a> [architecture](#input\_architecture) | Lambda function architecture | `string` | `x86_64` | no |
 | <a name="input_notification_email"></a> [notification_email](#input\_notification\_email) | Failure notification email address | `string` | `null` | no |
+| <a name="input_sns_kms_key_arn"></a> [sns\_kms\_key\_arn](#input\_sns\_kms\_key\_arn) | Optional KMS key ARN (not an alias) to encrypt the Lambda failure-notification SNS topic. Leave null for no encryption. The key policy must allow `sns.amazonaws.com` and the Lambda execution role to use `kms:Decrypt` and `kms:GenerateDataKey*`. | `string` | `null` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | A map of tags to add to all resources | `map(string)` | `{}` | no |
 | <a name="input_cloudwatch_logs_retention_in_days"></a> [cloudwatch\_logs\_retention\_in\_days](#input\_cloudwatch\_logs\_retention\_in\_days) | Retention time of the Cloudwatch log group in which the logs of the lambda function are written to | `number` | `null` | no |
 

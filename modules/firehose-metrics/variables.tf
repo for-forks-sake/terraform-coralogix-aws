@@ -8,9 +8,37 @@ variable "coralogix_region" {
 }
 
 variable "api_key" {
-  description = "Coralogix account api key"
+  description = "Coralogix account API key. Ignored when api_key_secret_arn is set. Required unless api_key_secret_arn is provided."
   type        = string
   sensitive   = true
+  default     = null
+
+  validation {
+    condition     = (var.api_key != null && var.api_key != "") || (var.api_key_secret_arn != null && var.api_key_secret_arn != "")
+    error_message = "You must provide either api_key or api_key_secret_arn."
+  }
+}
+
+variable "api_key_secret_arn" {
+  description = <<-EOT
+    ARN of a Secrets Manager secret holding the Coralogix API key as JSON, {"api_key": "..."}.
+    When set, Firehose reads the key at runtime and api_key is ignored, so rotating the secret
+    takes effect without a Terraform apply. This must be a separate secret from any plaintext
+    value used with api_key. Must be in the same region as the delivery stream.
+  EOT
+  type        = string
+  default     = null
+}
+
+variable "api_key_secret_kms_key_arn" {
+  description = "Optional ARN of the KMS key used to encrypt the Secrets Manager secret. Required only if the secret uses a customer managed key (CMK)."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.api_key_secret_kms_key_arn == null || var.api_key_secret_kms_key_arn != ""
+    error_message = "api_key_secret_kms_key_arn must be null or a non-empty KMS key ARN."
+  }
 }
 
 variable "firehose_stream" {
@@ -239,5 +267,33 @@ variable "server_side_encryption" {
   validation {
     condition     = contains(["AWS_OWNED_CMK", "CUSTOMER_MANAGED_CMK"], var.server_side_encryption.key_type)
     error_message = "Valid values for key_type are AWS_OWNED_CMK and CUSTOMER_MANAGED_CMK."
+  }
+}
+
+variable "static_labels" {
+  description = "List of key-value pairs that will be added as labels to every metric in the integration."
+  type        = list(string)
+  default     = []
+}
+
+variable "cross_account_enabled" {
+  description = "Enable cross-account resource tag enrichment for OAM. When true, the Lambda will assume roles in linked accounts to fetch resource tags. Requires cross_account_roles to be set."
+  type        = bool
+  default     = false
+}
+
+variable "cross_account_roles" {
+  description = "Map of AWS account IDs to IAM role ARNs for cross-account tag enrichment. Example: {\"123456789012\" = \"arn:aws:iam::123456789012:role/CoralogixMetricsReader\"}"
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = length(var.cross_account_roles) == 0 || var.cross_account_enabled
+    error_message = "cross_account_roles can only be set when cross_account_enabled is true."
+  }
+
+  validation {
+    condition     = !var.cross_account_enabled || length(var.cross_account_roles) > 0
+    error_message = "cross_account_roles must be set when cross_account_enabled is true."
   }
 }

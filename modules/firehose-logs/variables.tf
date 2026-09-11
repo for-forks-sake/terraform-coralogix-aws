@@ -8,9 +8,37 @@ variable "coralogix_region" {
 }
 
 variable "api_key" {
-  description = "Coralogix account api key"
+  description = "Coralogix account API key. Ignored when api_key_secret_arn is set. Required unless api_key_secret_arn is provided."
   type        = string
   sensitive   = true
+  default     = null
+
+  validation {
+    condition     = (var.api_key != null && var.api_key != "") || (var.api_key_secret_arn != null && var.api_key_secret_arn != "")
+    error_message = "You must provide either api_key or api_key_secret_arn."
+  }
+}
+
+variable "api_key_secret_arn" {
+  description = <<-EOT
+    ARN of a Secrets Manager secret holding the Coralogix API key as JSON, {"api_key": "..."}.
+    When set, Firehose reads the key at runtime and api_key is ignored, so rotating the secret
+    takes effect without a Terraform apply. This must be a separate secret from any plaintext
+    value used with api_key. Must be in the same region as the delivery stream.
+  EOT
+  type        = string
+  default     = null
+}
+
+variable "api_key_secret_kms_key_arn" {
+  description = "Optional ARN of the KMS key used to encrypt the Secrets Manager secret. Required only if the secret uses a customer managed key (CMK)."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.api_key_secret_kms_key_arn == null || var.api_key_secret_kms_key_arn != ""
+    error_message = "api_key_secret_kms_key_arn must be null or a non-empty KMS key ARN."
+  }
 }
 
 variable "firehose_stream" {
@@ -123,5 +151,16 @@ variable "server_side_encryption" {
   validation {
     condition     = contains(["AWS_OWNED_CMK", "CUSTOMER_MANAGED_CMK"], var.server_side_encryption.key_type)
     error_message = "Valid values for key_type are AWS_OWNED_CMK and CUSTOMER_MANAGED_CMK."
+  }
+}
+
+variable "content_encoding" {
+  description = "Content encoding for the firehose delivery stream"
+  type        = string
+  default     = "GZIP"
+
+  validation {
+    condition     = contains(["NONE", "GZIP"], var.content_encoding)
+    error_message = "Allowed values are NONE and GZIP"
   }
 }

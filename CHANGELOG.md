@@ -1,4 +1,305 @@
 # Changelog
+
+## v4.11.1
+
+#### **coralogix-aws-shipper**
+### 🛠️ Bug fixes 🛠️
+- Fixed a perpetual Firehose diff (CDS-3168): removed the explicit `RoleArn` parameter from the Firehose Lambda processor to fix perpetual diffs. The processor/invoke IAM policy references the Lambda by its `function:` ARN form.
+- Switched the metrics Firehose IAM role and policy to `name_prefix` so repeated deploys no longer collide on a fixed name.
+- Added optional `firehose_role_arn` and `create_firehose_role` variables to bring your own metrics Firehose delivery role instead of having the module create one. Only relevant when `telemetry_mode = "metrics"`.
+
+## v4.11.0
+
+#### **coralogix-aws-shipper**, **resource-metadata**, **resource-metadata-sqs**, **lambda-manager**
+### 💡 Enhancements 💡
+- Added optional `sns_kms_key_arn` (KMS key ARN, not an alias) to encrypt the Lambda failure-notification SNS topic. Leave unset for no encryption. The key policy must allow `sns.amazonaws.com` and the Lambda execution role to use `kms:Decrypt` and `kms:GenerateDataKey*`.
+
+## v4.10.0
+
+#### **firehose-logs**, **firehose-metrics**
+### 💡 Enhancements 💡
+- Added optional Secrets Manager support for the Coralogix API key via `api_key_secret_arn` (and optional `api_key_secret_kms_key_arn` for CMK-encrypted secrets). When set, Firehose uses `secrets_manager_configuration` to fetch `{"api_key": "..."}` at runtime instead of freezing a literal `access_key` at apply time. `api_key` remains supported and is required unless a secret ARN is provided.
+- Raised `firehose-logs` Terraform `required_version` to `>= 1.9.0` (matching `firehose-metrics`) so the cross-variable `api_key` / `api_key_secret_arn` validation is supported.
+
+## v4.9.0
+
+#### **ecs-ec2**
+### 💡 Enhancements 💡
+- Added optional profiling support with `profiling_enabled`, a separate profiling daemon service, profiling S3 config overrides, and `profiling_initial_fallback_configs`.
+- Profiling follows `supervisor_enabled`: collector mode requires profiling S3 paths; supervised mode embeds a NOP bootstrap and profiling Supervisor config with `service.profilesSupport`.
+- When Supervisor is enabled, all deployed agents run with `service.profilesSupport`, even when `profiling_enabled = false`. This allows the usage of profiling components via Fleet Management or S3 configuration without redeploying the ECS service.
+- Default `supervised_image_version` is now `v0.11.0`.
+- The auto-created task role policy includes the profiling bucket when profiling S3 paths are set.
+
+## v4.8.0
+
+#### **coralogix-aws-shipper**
+### 💡 Enhancements 💡
+- Added `log_export_protocol` and `otlp_endpoint` to support Coralogix REST, direct Coralogix OTLP/gRPC, and Collector OTLP/gRPC log export routes (parity with the shipper CloudFormation template). Default remains `coralogix_rest`.
+- Added `disable_log_severity_detection` to optionally disable keyword-based log severity detection while retaining protocol-level `Info` severity. Default remains `false`.
+
+## v4.7.0
+
+#### **s3-archive**
+### 💡 Enhancements 💡
+- Added `enforce_https` variable (default `true`) that appends an `AllowSSLRequestsOnly` statement to the logs and metrics archive bucket policies, denying any request made with `aws:SecureTransport = false`. Set it to `false` to keep the previous policies unchanged.
+
+## v4.6.0
+
+#### **ecs-ec2**
+### 💡 Enhancements 💡
+- Added `initial_fallback_configs` for Supervisor mode. When set, the embedded Supervisor config receives `agent.initial_fallback_configs` with the provided `s3://` URLs. Requires `s3_config_bucket`.
+
+## v4.5.0
+
+#### **ecs-ec2**
+### 💡 Enhancements 💡
+- Added Supervisor mode to `ecs-ec2`, controlled by `supervisor_enabled`, with supervised CDOT `v0.10.0`, embedded NOP bootstrap configs, and optional S3 overrides.
+- When the module creates the task definition without a custom task role, it creates a task role with runtime S3 object-read and bucket-listing permissions. This keeps planning working when S3 bucket or key values are computed; the execution role no longer receives runtime S3 permissions.
+
+## v4.4.0
+
+#### **coralogix-aws-shipper**
+### 💡 Enhancements 💡
+- Added `enable_aws_fips` and `aws_use_fips_endpoint` variables to control the shipper Lambda's FIPS environment variables (`ENABLE_AWS_FIPS`, `AWS_USE_FIPS_ENDPOINT`). When `govcloud_deployment = true`, both default to `true` (FIPS 140-3 enabled) and can be explicitly set to `false` to disable. No effect when `govcloud_deployment = false`.
+
+## v4.3.5
+
+#### **firehose-metrics**
+### 💡 bug fix 💡
+- Fix lambda processor `NoSuchKey` error when using `custom_s3_bucket` (e.g. GovCloud deployments). The local-exec was uploading the zip with key `bootstrap.zip` while the Lambda resource expected `firehose-metrics-transformer.zip`.
+
+## v4.3.4
+
+#### **coralogix-aws-shipper**
+### 💡 bug fix 💡
+- Fix bug with new variable `tracing_mode` condition 
+
+## v4.3.3
+
+#### **coralogix-aws-shipper**
+### 💡 Enhancements 💡
+- Added `tracing_mode` variable to configure AWS X-Ray tracing on the Lambda function (`PassThrough` or `Active`). Defaults to `null` (no change for existing deployments).
+
+## v4.3.2
+
+#### **coralogix-aws-shipper**
+### 💡 Enhancements 💡
+- Added `create_sqs_queue_policy` variable to allow users to preserve existing SQS queue policies when using SQS-based integrations (S3, CloudTrail, VpcFlow, CloudFront, S3Csv). Set to `false` to prevent the module from overwriting custom SQS queue policies.
+
+## v4.3.1
+
+#### **ecs-ec2-windows**
+### 💡 Enhancements 💡
+- Added `ecsattributesprocessor`
+
+## v4.3.0
+
+#### **coralogix-aws-shipper**
+### 💡 Enhancements 💡
+- Added AWS tags enrichment to `firehose-metrics` with the possibility to cache the API output.
+- Added custom attributes to `firehose-metrics`.
+
+## v4.2.1
+
+#### **lambda-manager**
+### 🐛 Bug Fixes 🐛
+- Allow the lambda-manager to catch all standard CreateLogGroup API events
+– Resolve deprecated `aws_region.name` warnings coming from pinned child module `terraform-aws-modules/lambda/aws`.
+
+#### **resource-metadata / resource-metadata-sqs**
+### 🐛 Bug Fixes 🐛
+– Resolve deprecated `aws_region.name` warnings coming from pinned child module `terraform-aws-modules/lambda/aws`.
+
+## v4.2.0
+#### **S3-archive**
+### 💡 Enhancements 💡
+- Add a tag to the archive buckets to allow tracking the existing coralogix resource.
+
+## v4.1.0
+#### **ecs-ec2-windows**
+### 🚀 New components 🚀
+- Add new module to implement ECS-EC2 integration on Windows
+
+## v4.0.0
+
+#### **ecs-ec2**
+### 🛑 Breaking Changes 🛑
+- **S3-only configuration**: Removed `config_source = "template"` and `config_source = "parameter-store"`. Configuration must now be loaded from S3. Use config generated by the Coralogix AWS ECS UI Integration or from the [integration chart](https://github.com/coralogix/telemetry-shippers/tree/master/otel-ecs-ec2).
+- **Removed variables**: `default_application_name`, `default_subsystem_name`, `enable_head_sampler`, `enable_span_metrics`, `enable_traces_db`, `sampling_percentage`, `sampler_mode`, `custom_config_parameter_store_name`, `use_custom_config_parameter_store`.
+- **Removed file**: `otel_config.tftpl.yaml` (embedded template config) has been removed.
+- **Added**: `MY_POD_IP` environment variable (set to `0.0.0.0`) for health check compatibility with integration chart config.
+- **Service-only mode**: When `task_definition_arn` is set, `task_execution_role_arn` and `task_role_arn` must be explicitly null. Validation will reject non-null values with: "In service-only mode (task_definition_arn set), task_execution_role_arn must be null. Roles are defined on the task definition; the service does not accept role ARNs. Set task_execution_role_arn = null explicitly." S3 inputs are ignored in this mode.
+
+### 🐛 Bug Fixes 🐛
+- **Secrets Manager policy**: The auto-created execution role's Secrets Manager policy is now conditional on both `use_api_key_secret` and `api_key_secret_arn != null`, preventing invalid policy documents when `api_key_secret_arn` is null.
+- **Secrets Manager + KMS**: When the API key secret uses a customer-managed KMS key, the auto-created execution role now includes `kms:Decrypt` permission so ECS can resolve the secret at task start.
+
+### 💡 Enhancements 💡
+- **Secrets Manager self-contained**: When `use_api_key_secret = true`, the module now auto-creates an execution role with both S3 read and `secretsmanager:GetSecretValue` permissions. `task_execution_role_arn` is no longer required in that case.
+- **Service-only mode**: `task_definition_arn` allows creating only the ECS service; S3 config and IAM are optional/ignored when set. Added `verify-service-only-mode.sh` test to assert no task definition or IAM role resources are planned.
+
+### Migration
+1. Upload your OTEL config to S3 (use config from Coralogix UI or [integration chart](https://github.com/coralogix/telemetry-shippers/blob/master/otel-ecs-ec2/examples/otel-config.yaml)).
+2. Set `s3_config_bucket` and `s3_config_key` when the module creates the task definition (omit when using `task_definition_arn`).
+3. Remove any removed variables from your configuration.
+4. If using `use_api_key_secret = true`, you may remove `task_execution_role_arn`—the module now auto-creates a role with Secrets Manager access.
+5. **Service-only mode**: When using `task_definition_arn`, explicitly set `task_execution_role_arn = null` and `task_role_arn = null` to avoid validation errors.
+6. **Migrating to service-only**: Before switching from full mode to `task_definition_arn`, remove the task definition and IAM roles from Terraform state (`terraform state rm`) so they remain in AWS. Otherwise Terraform will destroy them and ECS cannot start new tasks.
+
+## v3.22.0
+#### **coralogix-aws-shipper**
+### 💡 Enhancements 💡
+- Added `log_stream_filter` variable to filter CloudWatch log events by log stream name using regex patterns. Useful for AWS Amplify or similar services where multiple branches write to a single log group with distinct log streams.
+
+## v3.21.0
+#### **firehose-logs**
+### 💡 Enhancements 💡
+- Allow control of content-encoding via variable.
+
+## v3.20.0
+#### **firehose-metrics**
+### 💡 Enhancements 💡
+- Add cross-account tag enrichment support via new `cross_account_enabled` and `cross_account_roles` variables. When enabled, the Lambda processor assumes roles in OAM-linked accounts to fetch and enrich metrics with resource tags.
+
+## v3.19.5
+#### **eventbridge**
+### 🐛 Bug Fix 🔧
+- Updated endpoint format from the legacy `https://aws-events.<domain>/aws/event` to the current Coralogix standard `https://ingress.<domain>/aws/event-bridge` for all regions.
+- Fixed `custom_url` variable being silently ignored when `coralogix_region = "Custom"`. The `endpoint_url` local now correctly uses `custom_url` for custom region deployments instead of falling back to `EU1`.
+
+## v3.19.4
+#### **resource-metadata-sqs**
+### 🐛 Bug Fix 🔧
+- Add missing env var `EC2_CHUNK_SIZE`
+- Add inline policy to assume cross-account AWS Config role
+
+## v3.19.3
+#### **resource-metadata-sqs**
+### 🐛 Bug Fix 🔧
+- `policy_statements` was updated so that optional statements are only added when needed, instead of being set to null when disabled. 
+
+## v3.19.2
+#### **firehose-metrics**
+### 🔧 Maintenance 🔧
+- Change Lambda runtime from `provided.al2` to `provided.al2023` to avoid AWS AL2 runtime deprecation deadlines.
+
+## v3.19.1
+#### **resource-metadata-sqs**
+### 💡 Enhancements 💡
+- Added `crossaccount_config_assume_role` variable to assume cross-account IAM role when querying AWS Config aggregator in a different account (CDS-2750).
+
+## v3.19.0
+#### **coralogix-aws-shipper**
+### 💡 Enhancements 💡
+- Added `starlark_script` variable for custom log transformation using Starlark scripts. Supports inline scripts (heredoc), local files via `file()`, S3 paths, HTTP/HTTPS URLs, and base64-encoded scripts.
+
+## v3.18.0
+#### **coralogix-aws-shipper**
+### 🐛 Bug Fix 🐛
+- Fixed "Invalid count argument" error when providing a custom execution role created in the same Terraform configuration (#294).
+
+### ⚠️ Breaking Change ⚠️
+- The `random_string.lambda_role` resource has been renamed to `random_string.id` and no longer uses `count`. On upgrade, Terraform will plan to destroy the old resource and create a new one with a different suffix, triggering replacement of the IAM role (`Coralogix-lambda-role-*`), the DLQ (`coralogix-aws-shipper-dlq-*`), and firehose-related resources if `telemetry_mode = "metrics"`. To preserve the existing suffix and avoid resource churn, run the following state migration **before** applying:
+  ```
+  terraform state mv 'module.<name>.random_string.lambda_role[0]' 'module.<name>.random_string.id'
+  ```
+
+### 💡 Enhancements 💡
+- Added `execution_role_arn` and `create_execution_role` variables for providing a custom Lambda execution role without breaking Terraform's plan-time dependency graph.
+- Deprecated `execution_role_name` in favor of `execution_role_arn`.
+
+## v3.16.0
+#### **ecs-ec2**
+### 🔒 Security Enhancements 🔒
+- **Separated Execution and Task Roles**: Added `task_role_arn` variable to allow users to specify a dedicated task role separate from the execution role, following the principle of least privilege. This addresses security concerns where using the same IAM role for both execution and task operations could expose broader permissions than necessary at runtime.
+- **Auto-created Minimal Task Role for S3**: When using S3 configuration source, the module now automatically creates a minimal task role with S3 read-only permissions if no custom `task_role_arn` is provided. This ensures the container can access the S3 configuration file at runtime while maintaining minimal permissions.
+### 💡 Enhancements 💡
+- Updated examples and documentation to demonstrate proper separation of execution and task roles for enhanced security.
+
+## v3.15.1
+#### **coralogix-aws-shipper**
+### 💡 Enhancements 💡
+- Added `log_group_filter_pattern` variable to allow customers to specify a filter pattern for CloudWatch log subscription filters. This enables filtering which logs are sent to Coralogix instead of forwarding all log events.
+
+## v3.15.0
+#### **firehose-metrics**
+### 💡 Enhancements 💡
+- Update IAM permissions accordingly to the latest version, featuring "Static Labels"
+
+## v3.14.1
+#### **resource-metadata**
+### 🔧 Maintenance 🔧
+- Update Node.js runtime version to 22.x.
+
+## v3.14.0
+#### **Multiple Modules**
+### 🔧 Maintenance 🔧
+- Migrate AWS provider version to `6.x` for all supported modules.
+- Unify `random` provider version to `3.x` for all supported modules.
+
+## v3.13.0
+#### **firehose-metrics**
+### 🔧 Maintenance 🔧
+- Migrate Lambda ZIP package to the common serverless repo bucket `coralogix-serverless-repo`
+
+## v3.12.0
+#### **coralogix-aws-shipper**
+### 💡 Enhancements 💡
+- Added `batch_metrics` and `metrics_batch_max_size` inputs to control the Lambda `BATCH_METRICS` and `METRICS_BATCH_MAX_SIZE` environment variables for Firehose metric batching.
+
+## v3.11.1
+#### **coralogix-aws-shipper, resource-metadata**
+### 🔧 Maintenance 🔧
+### 🛑 Breaking changes 🛑
+- Update AWS provider requirement to `>= 6.0` for both modules
+  - **coralogix-aws-shipper**: AWS provider requirement updated from `>= 5.32.0` to `>= 6.0`
+  - **resource-metadata**: AWS provider requirement updated from `>= 4.15.1, < 6.0` to `>= 6.0`
+- **resource-metadata**: Update minimum Terraform version from `>= 0.13.1` to `>= 1.5.7`
+- **resource-metadata**: Upgrade `terraform-aws-modules/eventbridge/aws` from v3.17.1 to v4.0.0
+
+## v3.11.0
+#### **firehose-metrics**
+### Support StaticLabels parameter to match coralogix-aws-metrics integration
+
+## v3.10.9
+#### **coralogix-aws-shipper**
+### 🔧 Maintenance 🔧
+- Upgrade `terraform-aws-modules/lambda/aws` from v7.2.0 to v8.1.2 to eliminate remaining deprecated `data.aws_region.current.name` warnings from external dependency
+
+## v3.10.8
+#### **Multiple Modules**
+### 🔧 Maintenance 🔧
+- **Deprecated Attribute Update**: Replace deprecated `data.aws_region.*.name` with `data.aws_region.*.id` across all modules to eliminate deprecation warnings
+
+## v3.10.7
+#### **ecs-ec2**
+### Add default values to default_application_name and default_subsystem_name
+
+## v3.10.6
+#### **ecs-ec2**
+### Update env variable name
+
+## v3.10.5 
+#### **coralogix-aws-shipper**
+### 💡 Enhancements 💡
+- Added variable to disable the creation of `lambda_notification` and `sqs_notification` to manage it outside the module.
+
+## v3.10.4 
+#### **coralogix-aws-shipper**
+### 💡 Enhancements 💡
+- Added `create_sns_topic_policy` variable to allow users to preserve existing SNS topic policies when using SNS-based integrations (S3, CloudTrail, VpcFlow, CloudFront, S3Csv). Set to `false` to prevent the module from overwriting custom SNS topic policies.
+
+## v3.10.3
+#### **s3-archive**
+### 💡 Enhancements 💡
+- Added `logs_bucket_id` and `metrics_bucket_id` outputs.
+
+## v3.10.2
+#### **coralogix-aws-shipper**
+### 💡 Enhancements 💡
+- Added variable to disable the creation of `aws_s3_bucket_notification` to manage it outside the module.
+
 ## v3.10.1
 #### **ecs-ec2-tail-sampling**
 ### 💡 Enhancements 💡

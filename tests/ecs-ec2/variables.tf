@@ -19,7 +19,25 @@ variable "image" {
 variable "image_version" {
   description = "Version tag for the coralogix-otel-collector image"
   type        = string
-  default     = "v0.4.2"
+  default     = "v0.5.10"
+}
+
+variable "supervisor_enabled" {
+  description = "Whether to test Supervisor mode"
+  type        = bool
+  default     = true
+}
+
+variable "supervised_image_repository" {
+  description = "Repository for the supervised CDOT image"
+  type        = string
+  default     = "cgx.jfrog.io/coralogix-docker-images/coralogix-otel-supervised-cdot"
+}
+
+variable "supervised_image_version" {
+  description = "Version tag for the supervised CDOT image"
+  type        = string
+  default     = "v0.11.0"
 }
 
 variable "coralogix_region" {
@@ -32,18 +50,6 @@ variable "custom_domain" {
   description = "Optional custom domain for Coralogix endpoint"
   type        = string
   default     = null
-}
-
-variable "default_application_name" {
-  description = "Default application name for Coralogix logs"
-  type        = string
-  default     = "ecs-ec2-tf-test"
-}
-
-variable "default_subsystem_name" {
-  description = "Default subsystem name for Coralogix logs"
-  type        = string
-  default     = "ecs-ec2-tf-test"
 }
 
 variable "use_api_key_secret" {
@@ -65,38 +71,62 @@ variable "api_key" {
   default     = "cxtp_CoralogixSendYourDataKey"
 }
 
-variable "config_source" {
-  description = "Configuration source for OpenTelemetry Collector. Options: 'template', 's3', 'parameter-store'"
-  type        = string
-  default     = "template"
-}
-
 variable "s3_config_bucket" {
-  description = "S3 bucket name containing the configuration file. Required when config_source is 's3'."
+  description = "S3 bucket containing optional collector and Supervisor config overrides"
   type        = string
   default     = null
 }
 
 variable "s3_config_key" {
-  description = "S3 object key (file path) for the configuration file. Required when config_source is 's3'."
+  description = "Optional S3 object key for the collector config"
   type        = string
   default     = null
 }
 
-variable "use_custom_config_parameter_store" {
-  description = "Whether to use a custom config from Parameter Store"
+variable "s3_supervisor_config_key" {
+  description = "Optional S3 object key for the Supervisor config"
+  type        = string
+  default     = null
+}
+
+variable "initial_fallback_configs" {
+  description = "Initial Supervisor fallback configuration URLs"
+  type        = list(string)
+  default     = []
+}
+
+variable "profiling_enabled" {
+  description = "Whether to enable the profiling daemon"
   type        = bool
   default     = false
 }
 
-variable "custom_config_parameter_store_name" {
-  description = "Name of the Parameter Store parameter containing the custom config"
+variable "profiling_s3_config_bucket" {
+  description = "S3 bucket for the profiling collector configuration"
   type        = string
   default     = null
 }
 
-variable "otel_config_file" {
-  description = "Path to a custom OpenTelemetry collector config file"
+variable "profiling_s3_config_key" {
+  description = "S3 object key for the profiling collector configuration"
+  type        = string
+  default     = null
+}
+
+variable "profiling_initial_fallback_configs" {
+  description = "Initial Supervisor fallback configuration URLs for the profiling agent"
+  type        = list(string)
+  default     = []
+}
+
+variable "profiling_memory" {
+  description = "Memory in MiB for the profiling task"
+  type        = number
+  default     = 512
+}
+
+variable "task_definition_arn" {
+  description = "Existing task definition ARN. When set, service-only mode: module creates only the ECS service."
   type        = string
   default     = null
 }
@@ -104,5 +134,47 @@ variable "otel_config_file" {
 variable "task_execution_role_arn" {
   description = "ARN of the IAM role that the Amazon ECS container agent assumes"
   type        = string
+  default     = null
+}
+
+variable "task_role_arn" {
+  description = "ARN of the task role (IAM role) that the container can assume at runtime"
+  type        = string
+  default     = null
+}
+
+variable "health_check_enabled" {
+  description = "Enable ECS container health check for the OTEL agent"
+  type        = bool
+  default     = false
+}
+
+variable "health_check_interval" {
+  description = "Health check interval in seconds"
+  type        = number
+  default     = 30
+}
+
+variable "health_check_timeout" {
+  description = "Health check timeout in seconds"
+  type        = number
+  default     = 5
+}
+
+variable "health_check_retries" {
+  description = "Health check retries"
+  type        = number
+  default     = 3
+}
+
+variable "memory" {
+  description = "Task memory in MiB"
+  type        = number
+  default     = 256
+}
+
+variable "tags" {
+  description = "Additional resource tags"
+  type        = map(string)
   default     = null
 }

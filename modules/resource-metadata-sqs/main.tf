@@ -14,10 +14,16 @@ locals {
     Provider = "Coralogix"
     License  = "Apache-2.0"
   }
+
+  sns_kms_key_resource = coalesce(
+    var.sns_kms_key_arn,
+    "arn:${data.aws_partition.current.partition}:kms:${data.aws_region.this.id}:${data.aws_caller_identity.current.account_id}:key/00000000-0000-0000-0000-000000000000"
+  )
 }
 
 data "aws_region" "this" {}
 data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
 
 resource "aws_sqs_queue" "metadata_queue" {
   name                       = "${local.function_name}-metadata-queue"
@@ -92,7 +98,7 @@ resource "null_resource" "s3_bucket" {
 module "collector_lambda" {
   source                 = "terraform-aws-modules/lambda/aws"
   depends_on             = [null_resource.s3_bucket]
-  version                = "7.20.1"
+  version                = "8.1.2"
   publish                = true
   function_name          = "${local.function_name}-collector"
   description            = "Collect AWS resource metadata for Coralogix."
@@ -113,63 +119,88 @@ module "collector_lambda" {
     CROSSACCOUNT_IAM_ACCOUNTIDS          = length(var.crossaccount_account_ids) > 0 ? join(",", var.crossaccount_account_ids) : null
     CROSSACCOUNT_IAM_ROLENAME            = length(var.crossaccount_iam_role_name) > 0 ? var.crossaccount_iam_role_name : null
     CROSSACCOUNT_CONFIG_AGGREGATOR       = length(var.crossaccount_config_aggregator) > 0 ? var.crossaccount_config_aggregator : null
+    CROSSACCOUNT_CONFIG_ASSUME_ROLE      = length(var.crossaccount_config_assume_role) > 0 ? var.crossaccount_config_assume_role : null
     AWS_RETRY_MODE                       = "adaptive"
     AWS_MAX_ATTEMPTS                     = 10
     IS_EC2_RESOURCE_TYPE_EXCLUDED        = var.excluded_ec2_resource_type
     IS_LAMBDA_RESOURCE_TYPE_EXCLUDED     = var.excluded_lambda_resource_type
     METADATA_QUEUE_URL                   = aws_sqs_queue.metadata_queue.url
+    EC2_CHUNK_SIZE                       = tostring(var.ec2_chunk_size)
   }
 
   s3_existing_package = {
-    bucket = var.custom_s3_bucket == "" ? "coralogix-serverless-repo-${data.aws_region.this.name}" : var.custom_s3_bucket
+    bucket = var.custom_s3_bucket == "" ? "coralogix-serverless-repo-${data.aws_region.this.id}" : var.custom_s3_bucket
     key    = "${var.package_name}-collector.zip"
   }
 
   attach_policy_statements = true
-  policy_statements = {
-    ec2 = {
-      effect = "Allow"
-      actions = [
-        "ec2:DescribeInstances"
-      ]
-      resources = ["*"]
+  policy_statements = merge(
+    {
+      ec2 = {
+        effect = "Allow"
+        actions = [
+          "ec2:DescribeInstances"
+        ]
+        resources = ["*"]
+      }
+      lambda = {
+        effect = "Allow"
+        actions = [
+          "lambda:ListFunctions"
+        ]
+        resources = ["*"]
+      }
+      tags = {
+        effect = "Allow"
+        actions = [
+          "tag:GetResources"
+        ]
+        resources = ["*"]
+      }
+      sqs = {
+        effect = "Allow"
+        actions = [
+          "sqs:SendMessage"
+        ]
+        resources = [aws_sqs_queue.metadata_queue.arn]
+      }
+    },
+    var.crossaccount_mode == "StaticIAM" ? {
+      assume_role = {
+        effect = "Allow"
+        actions = [
+          "sts:AssumeRole"
+        ]
+        resources = ["arn:aws:iam::*:role/${var.crossaccount_iam_role_name}"]
+      }
+    } : {},
+    var.crossaccount_mode == "Config" ? {
+      config = {
+        effect = "Allow"
+        actions = [
+          "config:SelectAggregateResourceConfig"
+        ]
+        resources = ["*"]
+      }
+    } : {},
+    var.crossaccount_mode == "Config" && length(var.crossaccount_config_assume_role) > 0 ? {
+      assume_config_role = {
+        effect = "Allow"
+        actions = [
+          "sts:AssumeRole"
+        ]
+        resources = [var.crossaccount_config_assume_role]
+      }
+    } : {},
+    {
+      sns_kms = {
+        sid       = "SnsKms"
+        effect    = "Allow"
+        actions   = ["kms:Decrypt", "kms:GenerateDataKey*"]
+        resources = [local.sns_kms_key_resource]
+      }
     }
-    lambda = {
-      effect = "Allow"
-      actions = [
-        "lambda:ListFunctions"
-      ]
-      resources = ["*"]
-    }
-    tags = {
-      effect = "Allow"
-      actions = [
-        "tag:GetResources"
-      ]
-      resources = ["*"]
-    }
-    sqs = {
-      effect = "Allow"
-      actions = [
-        "sqs:SendMessage"
-      ]
-      resources = [aws_sqs_queue.metadata_queue.arn]
-    }
-    assume_role = var.crossaccount_mode == "StaticIAM" ? {
-      effect = "Allow"
-      actions = [
-        "sts:AssumeRole"
-      ]
-      resources = ["arn:aws:iam::*:role/${var.crossaccount_iam_role_name}"]
-    } : null
-    config = var.crossaccount_mode == "Config" ? {
-      effect = "Allow"
-      actions = [
-        "config:SelectAggregateResourceConfig"
-      ]
-      resources = ["*"]
-    } : null
-  }
+  )
 
   allowed_triggers = {
     EventBridge = {
@@ -184,7 +215,7 @@ module "collector_lambda" {
 module "generator_lambda" {
   source                 = "terraform-aws-modules/lambda/aws"
   depends_on             = [null_resource.s3_bucket]
-  version                = "7.20.1"
+  version                = "8.1.2"
   publish                = true
   create                 = var.secret_manager_enabled == false ? true : false
   function_name          = "${local.function_name}-generator"
@@ -207,52 +238,65 @@ module "generator_lambda" {
     RESOURCE_TTL_MINUTES         = var.resource_ttl_minutes
     AWS_RETRY_MODE               = "adaptive"
     AWS_MAX_ATTEMPTS             = 10
+    EC2_CHUNK_SIZE               = tostring(var.ec2_chunk_size)
   }
 
   s3_existing_package = {
-    bucket = var.custom_s3_bucket == "" ? "coralogix-serverless-repo-${data.aws_region.this.name}" : var.custom_s3_bucket
+    bucket = var.custom_s3_bucket == "" ? "coralogix-serverless-repo-${data.aws_region.this.id}" : var.custom_s3_bucket
     key    = "${var.package_name}-generator.zip"
   }
 
   attach_policy_statements = true
-  policy_statements = {
-    ec2 = {
-      effect = "Allow"
-      actions = [
-        "ec2:DescribeInstances"
-      ]
-      resources = ["*"]
+  policy_statements = merge(
+    {
+      ec2 = {
+        effect = "Allow"
+        actions = [
+          "ec2:DescribeInstances"
+        ]
+        resources = ["*"]
+      }
+      lambda = {
+        effect = "Allow"
+        actions = [
+          "lambda:ListVersionsByFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:GetFunctionConcurrency",
+          "lambda:ListTags",
+          "lambda:ListAliases",
+          "lambda:ListEventSourceMappings",
+          "lambda:GetPolicy"
+        ]
+        resources = ["*"]
+      }
+      sqs = {
+        effect = "Allow"
+        actions = [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes"
+        ]
+        resources = [aws_sqs_queue.metadata_queue.arn]
+      }
+    },
+    var.crossaccount_mode != "Disabled" ? {
+      assume_role = {
+        effect = "Allow"
+        actions = [
+          "sts:AssumeRole"
+        ]
+        resources = ["arn:aws:iam::*:role/${var.crossaccount_iam_role_name}"]
+      }
+    } : {},
+    {
+      sns_kms = {
+        sid       = "SnsKms"
+        effect    = "Allow"
+        actions   = ["kms:Decrypt", "kms:GenerateDataKey*"]
+        resources = [local.sns_kms_key_resource]
+      }
     }
-    lambda = {
-      effect = "Allow"
-      actions = [
-        "lambda:ListVersionsByFunction",
-        "lambda:GetFunctionConfiguration",
-        "lambda:GetFunctionConcurrency",
-        "lambda:ListTags",
-        "lambda:ListAliases",
-        "lambda:ListEventSourceMappings",
-        "lambda:GetPolicy"
-      ]
-      resources = ["*"]
-    }
-    sqs = {
-      effect = "Allow"
-      actions = [
-        "sqs:ReceiveMessage",
-        "sqs:DeleteMessage",
-        "sqs:GetQueueAttributes"
-      ]
-      resources = [aws_sqs_queue.metadata_queue.arn]
-    }
-    assume_role = var.crossaccount_mode == "Disabled" ? null : {
-      effect = "Allow"
-      actions = [
-        "sts:AssumeRole"
-      ]
-      resources = ["arn:aws:iam::*:role/${var.crossaccount_iam_role_name}"]
-    }
-  }
+  )
 
   allowed_triggers = {
     SQS = {
@@ -278,7 +322,7 @@ module "generator_lambda" {
 module "generator_lambda_sm" {
   source                 = "terraform-aws-modules/lambda/aws"
   depends_on             = [null_resource.s3_bucket]
-  version                = "7.20.1"
+  version                = "8.1.2"
   publish                = true
   create                 = var.secret_manager_enabled ? true : false
   function_name          = "${local.function_name}-generator"
@@ -303,62 +347,75 @@ module "generator_lambda_sm" {
     RESOURCE_TTL_MINUTES         = var.resource_ttl_minutes
     AWS_RETRY_MODE               = "adaptive"
     AWS_MAX_ATTEMPTS             = 10
+    EC2_CHUNK_SIZE               = tostring(var.ec2_chunk_size)
   }
 
   s3_existing_package = {
-    bucket = var.custom_s3_bucket == "" ? "coralogix-serverless-repo-${data.aws_region.this.name}" : var.custom_s3_bucket
+    bucket = var.custom_s3_bucket == "" ? "coralogix-serverless-repo-${data.aws_region.this.id}" : var.custom_s3_bucket
     key    = "${var.package_name}-generator.zip"
   }
 
   attach_policy_statements = true
-  policy_statements = {
-    ec2 = {
-      effect = "Allow"
-      actions = [
-        "ec2:DescribeInstances"
-      ]
-      resources = ["*"]
+  policy_statements = merge(
+    {
+      ec2 = {
+        effect = "Allow"
+        actions = [
+          "ec2:DescribeInstances"
+        ]
+        resources = ["*"]
+      }
+      lambda = {
+        effect = "Allow"
+        actions = [
+          "lambda:ListVersionsByFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:GetFunctionConcurrency",
+          "lambda:ListTags",
+          "lambda:ListAliases",
+          "lambda:ListEventSourceMappings",
+          "lambda:GetPolicy"
+        ]
+        resources = ["*"]
+      }
+      sqs = {
+        effect = "Allow"
+        actions = [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes"
+        ]
+        resources = [aws_sqs_queue.metadata_queue.arn]
+      }
+      secrets = {
+        effect = "Allow"
+        actions = [
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:UpdateSecret"
+        ]
+        resources = ["*"]
+      }
+    },
+    var.crossaccount_mode != "Disabled" ? {
+      assume_role = {
+        effect = "Allow"
+        actions = [
+          "sts:AssumeRole"
+        ]
+        resources = ["arn:aws:iam::*:role/${var.crossaccount_iam_role_name}"]
+      }
+    } : {},
+    {
+      sns_kms = {
+        sid       = "SnsKms"
+        effect    = "Allow"
+        actions   = ["kms:Decrypt", "kms:GenerateDataKey*"]
+        resources = [local.sns_kms_key_resource]
+      }
     }
-    lambda = {
-      effect = "Allow"
-      actions = [
-        "lambda:ListVersionsByFunction",
-        "lambda:GetFunctionConfiguration",
-        "lambda:GetFunctionConcurrency",
-        "lambda:ListTags",
-        "lambda:ListAliases",
-        "lambda:ListEventSourceMappings",
-        "lambda:GetPolicy"
-      ]
-      resources = ["*"]
-    }
-    sqs = {
-      effect = "Allow"
-      actions = [
-        "sqs:ReceiveMessage",
-        "sqs:DeleteMessage",
-        "sqs:GetQueueAttributes"
-      ]
-      resources = [aws_sqs_queue.metadata_queue.arn]
-    }
-    assume_role = var.crossaccount_mode == "Disabled" ? null : {
-      effect = "Allow"
-      actions = [
-        "sts:AssumeRole"
-      ]
-      resources = ["arn:aws:iam::*:role/${var.crossaccount_iam_role_name}"]
-    }
-    secrets = {
-      effect = "Allow"
-      actions = [
-        "secretsmanager:DescribeSecret",
-        "secretsmanager:GetSecretValue",
-        "secretsmanager:PutSecretValue",
-        "secretsmanager:UpdateSecret"
-      ]
-      resources = ["*"]
-    }
-  }
+  )
 
   allowed_triggers = {
     SQS = {
@@ -380,14 +437,15 @@ module "generator_lambda_sm" {
 }
 
 resource "aws_sns_topic" "this" {
-  name_prefix  = "${local.function_name}-Failure"
-  display_name = "${local.function_name}-Failure"
-  tags         = merge(var.tags, local.tags)
+  name_prefix       = "${local.function_name}-Failure"
+  display_name      = "${local.function_name}-Failure"
+  kms_master_key_id = var.sns_kms_key_arn
+  tags              = merge(var.tags, local.tags)
 }
 
 resource "aws_secretsmanager_secret" "api_key_secret" {
   count       = var.secret_manager_enabled && var.create_secret ? 1 : 0
-  name        = "lambda/coralogix/${data.aws_region.this.name}/${local.function_name}"
+  name        = "lambda/coralogix/${data.aws_region.this.id}/${local.function_name}"
   description = "Coralogix Send Your Data key Secret"
 }
 

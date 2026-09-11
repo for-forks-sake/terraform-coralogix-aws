@@ -53,10 +53,21 @@ If you're deploying multiple integrations through the same S3 bucket, you'll nee
 | <a name="input_coralogix_region"></a> [coralogix\_region](#input\_coralogix\_region) | The Coralogix location region, available options: [`EU1`, `EU2`, `AP1`, `AP2`, `AP3`, `US1`, `US2`, `Custom`] | `string` | n/a | yes |
 | <a name="input_custom_domain"></a> [custom_domain](#input\_custom\_domain) | If using a custom domain name for your private cluster, Coralogix will send telemetry from the specified address (e.g. custom.coralogix.com). There is no need to add `ingress.` to the domain.| `string` | n/a | no |
 | <a name="input_integration_type"></a> [integration_type](#input\_data\_type) | The AWS service to integrate with Coralogix. Possible values: S3, CloudTrail, VpcFlow, CloudWatch, S3Csv, SNS, SQS, Kinesis, CloudFront, MSK, Kafka, EcrScan. | `string` | `S3` | yes |
-| <a name="input_api_key"></a> [api\_key](#input\_api_\_key) | The Coralogix Send Your Data - [API key](https://coralogix.com/docs/send-your-data-api-key/) validates your authenticity. This value can be a direct Coralogix API key or an AWS secret manager ARN containing the API key.| `string` | n/a | yes |
+| <a name="input_api_key"></a> [api\_key](#input\_api_\_key) | The Coralogix Send Your Data - [API key](https://coralogix.com/docs/send-your-data-api-key/) validates your authenticity. This value can be a direct Coralogix API key or an AWS secret manager ARN containing the API key. Required for metrics, REST logs, and direct Coralogix OTLP; leave empty for Collector OTLP.| `string` | n/a | yes |
 | <a name="input_store_api_key_in_secrets_manager"></a> [store\_api\_key\_in\_secrets\_manager](#input\_store\_api\_key\_in\_secrets\_manager) | Enable this to store your API key securely. Otherwise, it will remain exposed in plain text as an environment variable in the Lambda function console.| bool | true | no |
+| <a name="input_log_export_protocol"></a> [log\_export\_protocol](#input\_log\_export\_protocol) | Log delivery protocol when `telemetry_mode` is `logs`: `coralogix_rest` (default) or `otlp_grpc`. Ignored for metrics.| `string` | `coralogix_rest` | no |
+| <a name="input_otlp_endpoint"></a> [otlp\_endpoint](#input\_otlp\_endpoint) | Optional Collector `http://` or `https://` origin for `otlp_grpc`. Empty selects direct Coralogix OTLP; non-empty selects unauthenticated Collector delivery.| `string` | `""` | no |
+| <a name="input_disable_log_severity_detection"></a> [disable\_log\_severity\_detection](#input\_disable\_log\_severity\_detection) | Disable keyword-based severity detection for logs. When `true`, logs use protocol-level `Info` severity without modifying the original log body. Ignored for metrics.| `bool` | `false` | no |
 | <a name="application_name"></a> [application\_name](#input\_application\_name) | The [name](https://coralogix.com/docs/application-and-subsystem-names/) of your application. For a dynamic value, use `$.my_log.field`. This option is not supported since version `1.1.0` for the [source code](https://github.com/coralogix/coralogix-aws-shipper/blob/master/CHANGELOG.md) | string | n\a | yes | 
 | <a name="subsystem_name"></a> [subsystem\_name](#input\_subsysten_\_name) | The [name](https://coralogix.com/docs/application-and-subsystem-names/) of your subsystem. For a dynamic value, use `$.my_log.field` for CloudWatch log group leave empty. This option is not supported since version `1.1.0` for the [source code](https://github.com/coralogix/coralogix-aws-shipper/blob/master/CHANGELOG.md) | string | n\a | yes |
+
+When `telemetry_mode` is `logs`, three export routes are available (matching the [shipper CloudFormation template](https://github.com/coralogix/coralogix-aws-shipper)):
+
+1. **Coralogix REST (default):** `log_export_protocol = "coralogix_rest"`.
+2. **Direct Coralogix OTLP/gRPC:** `log_export_protocol = "otlp_grpc"` with empty `otlp_endpoint` (uses `coralogix_region`/`custom_domain` and `api_key`).
+3. **Collector OTLP/gRPC:** `log_export_protocol = "otlp_grpc"` with a non-empty `otlp_endpoint` (no Coralogix API key).
+
+OTLP routes require a shipper binary that supports them; pin `source_code_version` after that shipper release is published.
 
 <!-- /static-modules-readme-end-description -->
 
@@ -70,8 +81,9 @@ If you're deploying multiple integrations through the same S3 bucket, you'll nee
 | <a name="input_s3_key_prefix"></a> [s3\_key\_prefix](#input\_s3\_key\_prefix) | The S3 path prefix to watch. | `string` |  n/a | no |
 | <a name="input_s3_key_suffix"></a> [s3\_key\_suffix](#input\_s3\_key\_suffix) | The S3 path suffix to watch. | `string` |  n/a | no |
 | <a name="input_s3_bucket_kms_arn"></a> [s3\_bucket\_kms\_arn](#input\_s3\_bucket\_kms\_arn) | The AWS ARN of the KMS key used to encrypt/decrypt objects in the specified S3 bucket. If provided, the Lambda policy will include permissions to decrypt using this key. | `string` |  n/a | no |
+| <a name="#input_s3_notification"></a> [s3\_notification](##input\_s3\_notification) | Controls whether an aws_s3_bucket_notification resource should be created to send S3 events to the application-specific Lambda functions. Set to false to disable the notification. | bool | true | no |
 | <a name="input_csv_delimiter"></a> [csv_delimiter](#input\_csv\_delimiter) | A single character to be used as a delimiter when ingesting a CSV file with a header line. This value is applicable when the S3Csv integration type is selected, for example, “,” or ” “.  | `string` |  n/a | no |
-| <a name="input_custom_csv_header"></a> [custom\_csv\_header](#input\_custom\_csv\_header) | List seperated by cs delimiter of a new headers for your csv, the variable must be with the same delimiter as the cs_delimiter. For example, if the cs_delimiter is \";\", then the variable vakue should be name;country;age, resulting in the following new headers in Corlaogix: name, country, age | `string` | n/a | no |
+| <a name="input_custom_csv_header"></a> [custom\_csv\_header](#input\_custom\_csv\_header) | List separated by cs delimiter of a new headers for your csv, the variable must be with the same delimiter as the cs_delimiter. For example, if the cs_delimiter is \";\", then the variable value should be name;country;age, resulting in the following new headers in Coralogix: name, country, age | `string` | n/a | no |
 | <a name="input_newline_pattern"></a> [newline\_pattern](#input\_newline\_pattern) | A regular expression to detect a new log line for multiline logs, e.g., \n(?=\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}.\d{3}). | `string` | n/a | no |
 | [integration_info](#additional-parameters-for-integration_info) | A map of integration information. Use this to deploy multiple integrations using the same s3 bucket. See the integration [parameters](#integration_info).| `mapping` | n/a | no |
 
@@ -100,6 +112,8 @@ If you're deploying multiple integrations through the same S3 bucket, you'll nee
 |------|-------------|------|---------|:--------:|
 | <a name="input_log_groups"></a> [log\_groups](#input\_log\_groups) | A comma-separated list of CloudWatch log group names to monitor. For example, (log-group1, log-group2, log-group3). | `list(string)` | n/a | yes |
 | <a name="input_log_group_prefix"></a> [log\_group\_prefix](#input\_log\_group\_prefix) |  list of strings of log group prefixes. The code will use these prefixes to create permissions for the Lambda instead of creating for each log group permission it will use the prefix with a wild card to give the Lambda access for all of the log groups that start with these prefix. This parameter doesn't replace the `log_groups` parameter.  For more information, refer to the Note below. | `list(string)` | n/a | no |
+| <a name="input_log_group_filter_pattern"></a> [log\_group\_filter\_pattern](#input\_log\_group\_filter\_pattern) | The filter pattern to use for the CloudWatch log subscription filter. Use this to filter which logs are sent to Coralogix. An empty string matches all log events. For filter pattern syntax, see [AWS documentation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/FilterAndPatternSyntax.html). | `string` | `""` | no |
+| <a name="input_log_stream_filter"></a> [log\_stream\_filter](#input\_log\_stream\_filter) | A regex pattern to filter CloudWatch log streams by name. Only events from matching streams are shipped. Example: `^main/` | `string` | `""` | no |
 
 > [!NOTE]
 > The `log_group` variable will get a list of log groups and then add them to the Lambda as triggers, each log group will also add permission to the Lambda, in some cases when there are a lot of log groups this will cause an error because the code 
@@ -119,6 +133,7 @@ If you're deploying multiple integrations through the same S3 bucket, you'll nee
 | <a name="input_sns_topic_name"></a> [sns_topic_name](#input\_sns\_topic\_name) | The SNS topic containing the SNS subscription. You need this only when using the SNS integration. | `string` |  n/a | yes |
 | <a name="input_sns_topic_filter"></a> [sns_topic_filter](#input\_sns\_topic\_filter) | Map of filters to add to the SNS topic Lambda subscription. | `map(any)` |  n/a | no |
 | <a name="input_sns_topic_filter_policy_scope"></a> [sns_topic_filter_policy_scope](#input\_sns\_topic\_filter\_policy\_scope) | The scope of the filter policy for the SNS topic Lambda subscription, could be `MessageAttributes` or `MessageBody` | `string` |  n/a | no |
+| <a name="input_create_sns_topic_policy"></a> [create_sns_topic_policy](#input\_create\_sns\_topic\_policy) | Whether to create and manage the SNS topic policy. Set to false if you want to manage the policy yourself and preserve existing permissions. | `bool` | `true` | no |
 
 <!-- /description -->
 
@@ -128,6 +143,7 @@ If you're deploying multiple integrations through the same S3 bucket, you'll nee
 | Name | Description | Type | Default | Required | 
 |------|-------------|------|---------|:--------:|
 | <a name="input_sqs_name"></a> [sqs_name](#input\_sqs\_name) | The name of the SQS queue to which you want to subscribe for retrieving messages.| `string` |  n/a | yes |
+| <a name="input_create_sqs_queue_policy"></a> [create_sqs_queue_policy](#input\_create\_sqs\_queue\_policy) | Whether to create and manage the SQS queue policy. Set to false if you want to manage the policy yourself and preserve existing permissions. | `bool` | `true` | no |
 
 <!-- /description -->
 
@@ -172,16 +188,39 @@ If you're deploying multiple integrations through the same S3 bucket, you'll nee
 | <a name="input_add_metadata"></a> [add\_metadata](#input\_add\_metadata) | Custom metadata to be added to the log message in the comma-separated format. The S3 options are: `bucket_name`,`key_name`. For CloudWatch `stream_name`, `loggroup_name`. For Kafka/MSK, use `topic_name` | `string` | n/a | no |
 | <a name="input_lambda_name"></a> [lambda\_name](#input\_lambda\_name) | The name the Lambda function to create. | `string` | n/a | no |
 | <a name="input_blocking_pattern"></a> [blocking\_pattern](#input\_blocking\_pattern) | A regular expression to identify lines excluded from being sent to Coralogix. For example, use `MainActivity.java:\d{3}` to match log lines with MainActivity followed by exactly three digits. | `string` | n/a | no |
+| <a name="input_starlark_script"></a> [starlark\_script](#input\_starlark\_script) | Starlark transformation script. Accepts raw content (heredoc), S3 path, HTTP URL, base64, or file() for local files. See [Log Transformation (Starlark)](#log-transformation-starlark). | `string` | `""` | no |
 | <a name="input_sampling_rate"></a> [sampling\_rate](#input\_sampling\_rate) | A message rate, such as 1 out of every N logs. For example, if your value is 10, a message will be sent for every 10th log. | `number` | `1` | no |
 | <a name="input_notification_email"></a> [notification_email](#input\_notification\_email) | A failure notification to be sent to the email address. | `string` |  n/a | no |
+| <a name="input_sns_kms_key_arn"></a> [sns\_kms\_key\_arn](#input\_sns\_kms\_key\_arn) | Optional KMS key ARN (not an alias) to encrypt the Lambda failure-notification SNS topic. Leave null for no encryption. The key policy must allow `sns.amazonaws.com` and the Lambda execution role to use `kms:Decrypt` and `kms:GenerateDataKey*`. | `string` | `null` | no |
 | <a name="input_custom_s3_bucket"></a> [custom\_s3\_bucket](#input\_custom\_s3\_bucket) | The name of an existing S3 bucket in your region, in which the Lambda zip code will be uploaded to. | `string` | n/a | no |
 | <a name="input_govcloud_deployment"></a> [govcloud\_deployment](#input\_govcloud\_deployment) | Enable if you deploy the integration in govcloud | `bool` | false | no |
+| <a name="input_enable_aws_fips"></a> [enable\_aws\_fips](#input\_enable\_aws\_fips) | Controls the `ENABLE_AWS_FIPS` environment variable on the shipper Lambda, switching the AWS SDK HTTP client to the AWS-LC FIPS-validated TLS provider. When `govcloud_deployment = true`, this defaults to `true` (FIPS 140-3 enabled). Set to `false` to explicitly disable. Has no effect when `govcloud_deployment = false`. | `bool` | `null` | no |
+| <a name="input_aws_use_fips_endpoint"></a> [aws\_use\_fips\_endpoint](#input\_aws\_use\_fips\_endpoint) | Controls the `AWS_USE_FIPS_ENDPOINT` environment variable on the shipper Lambda, routing AWS SDK calls to FIPS service endpoints. When `govcloud_deployment = true`, this defaults to `true`. Set to `false` to explicitly disable. Has no effect when `govcloud_deployment = false`. | `bool` | `null` | no |
 
 **Custom S3 bucket**
 
 Use the `custom_s3_bucket` variable only when deploying the integration in an AWS region where CX does not provide a public bucket (e.g., GovCloud). When using this variable, you must create an S3 bucket in the desired region for the integration. After that, pass the bucket name as `custom_s3_bucket`. The module will download the integration file to your local workspace, upload it to the custom_s3_bucket, and then remove the file from your local workspace once the process is complete.
 
-When using this variable you will need to create an S3 bucket in the region where you want to run the integration. Then, pass this bucket name as `custom_s3_bucket`. The module will download the integration file to your local workspace, and then upload these files to the `custom_s3_bucket`. At the end, remove the file from your local workspace once the process is complete. 
+When using this variable you will need to create an S3 bucket in the region where you want to run the integration. Then, pass this bucket name as `custom_s3_bucket`. The module will download the integration file to your local workspace, and then upload these files to the `custom_s3_bucket`. At the end, remove the file from your local workspace once the process is complete.
+
+**AWS GovCloud and FIPS**
+
+A single shipper artifact supports both commercial and GovCloud deployments; FIPS is toggled at runtime via Lambda environment variables. When `govcloud_deployment = true`, the module sets both `ENABLE_AWS_FIPS=true` and `AWS_USE_FIPS_ENDPOINT=true` on the Lambda by default, which routes all AWS SDK calls to FIPS service endpoints and uses the AWS-LC FIPS-validated TLS provider.
+
+If you need to disable FIPS in a GovCloud deployment, set the corresponding variable explicitly:
+
+```hcl
+module "coralogix-shipper" {
+  source = "coralogix/aws/coralogix//modules/coralogix-aws-shipper"
+
+  govcloud_deployment   = true
+  enable_aws_fips       = false  # disable AWS-LC FIPS TLS provider
+  aws_use_fips_endpoint = false  # disable FIPS service endpoints
+  # ...
+}
+```
+
+When `govcloud_deployment = false`, these variables are ignored and the env vars are not set on the Lambda.
 
 ### Lambda configuration (optional)
 
@@ -195,7 +234,9 @@ When using this variable you will need to create an S3 bucket in the region wher
 | <a name="cpu_arch"></a> [cpu_arch](#input\_cpu\_arch) | Lambda function CPU architecture: arm64 or x86_64. | `string` | arm64 | no |
 | <a name="runtime"></a> [runtime](#input\_runtime) | Lambda function runtime. For example, 'provided.al2023', 'provided.al2'. | `string` | provided.al2023 | no |
 | <a name="reserved_concurrent_executions"></a> [reserved_concurrent_executions](#input\_reserved_concurrent_executions) | The number of concurrent executions reserved for the function. Leave empty to let Lambda use unreserved account concurrency.	 | `number` | n/a | no |
-| <a name="execution_role_name"></a> [execution_role_name](#input\_execution_role_name) | The ARN of a user defined role be used as the execution role for the Lambda function. | `string` | n/a | no |
+| <a name="execution_role_arn"></a> [execution_role_arn](#input\_execution_role_arn) | ARN of a custom IAM execution role for the Lambda function. Preferred over `execution_role_name`. | `string` | n/a | no |
+| <a name="execution_role_name"></a> [execution_role_name](#input\_execution_role_name) | **(Deprecated)** Name of a custom IAM execution role. Use `execution_role_arn` instead. | `string` | n/a | no |
+| <a name="create_execution_role"></a> [create_execution_role](#input\_create_execution_role) | Whether the module should create its own IAM role for the Lambda function. Defaults to `true`. When supplying a custom role via `execution_role_arn` or `execution_role_name`, you must explicitly set `create_execution_role = false`. | `bool` | `true` | no |
 | <a name="lambda_assume_role_arn"></a> [lambda_assume_role_arn](#input\_lambda_assume_role_arn) | A role that the Lambda will assume. Leave empty to use the default permissions. Note that if this parameter is used, all S3 and ECR API calls from the Lambda will be made with the permissions of the assumed role. | `string` | n/a | no |
 | <a name="source_code_version"></a> [source_code_version](#input\_source_code_version) | The version of the source code that the Lambda will use. Must be in `x.x.x` format. The oldest supported version is `1.0.8`. For more information about each version changes, see [Changelog](https://github.com/coralogix/coralogix-aws-shipper/blob/master/CHANGELOG.md). By default, the Lambda will use the latest version. | `string` | n/a | no |
 
@@ -324,6 +365,8 @@ To enable CloudWatch metrics streaming via Firehose (PrivateLink), you must prov
 | Parameter | Description | Default Value | Required |
 |-----------|-------------|---------------|--------------------|
 | telemetry_mode | Specify the telemetry collection modes, supported values (`metrics`, `logs`). Note that this value must be set to `metrics` for the Cloudwatch metric stream workflow | logs. | :heavy_check_mark: |
+| batch_metrics | Enable batching of OpenTelemetry metric messages before they are sent to Coralogix. Available only when `telemetry_mode = "metrics"`. | `false` | |
+| metrics_batch_max_size | Maximum size (in MB) of the aggregated metrics payload before the batch is flushed. Used only when `batch_metrics` is enabled. | `4` | |
 | api_key | The Coralogix Send Your Data - [API key](https://coralogix.com/docs/send-your-data-api-key/) validates your authenticity. This value can be a direct Coralogix API key or an AWS secret manager ARN containing the API key.| `string` | n/a | yes |
 | application_name | The name of the application for which the integration is configured. [Metadata](#metadata) specifies dynamic value retrieval options. | string | n\a | yes | 
 | subsystem_name | The name of your subsystem. For a dynamic value, refer to the [Metadata](#metadata) section. For CloudWatch, leave this field empty to use the log group name. | string | n\a | yes |
@@ -331,13 +374,29 @@ To enable CloudWatch metrics streaming via Firehose (PrivateLink), you must prov
 | s3_bucket_name | The S3 bucket to be used to store records that have failed processing. | | :heavy_check_mark: |
 | subnet_ids | The ID of the subnet for the integration deployment. | `list(string)` | n/a | :heavy_check_mark: |
 | security_group_ids | The ID of the security group for the integration deployment. | `list(string)` | n/a | :heavy_check_mark: |
-| include_metric_stream_filter | List of inclusive metric filters. If you specify this parameter, the stream sends only the conditional metric names from the specified metric namespaces. Leave empty to send all metrics | `llist(object({namespace=string, metric_names=list(string)})` | n/a | |
+| include_metric_stream_filter | List of inclusive metric filters. If you specify this parameter, the stream sends only the conditional metric names from the specified metric namespaces. Leave empty to send all metrics | `list(object({namespace=string, metric_names=list(string)}))` | n/a | |
+| metrics_tag_enrichment_enabled | When `telemetry_mode = "metrics"`, resolve AWS resource tags via the Resource Groups Tagging API and attach them to streamed metric datapoints. When `true`, the module adds the required IAM permissions to the Lambda role. Set `false` if the function cannot reach the tagging API (for example from a restrictive VPC). | `bool` | `false` | |
+| metrics_continue_on_resource_failure | When `telemetry_mode = "metrics"`, if `true`, tagging or resource-discovery errors cause the shipper to omit AWS tags for affected data and still deliver metrics. If `false`, the invocation fails instead. | `bool` | `true` | |
+| metrics_file_cache_enabled | When `telemetry_mode = "metrics"`, cache discovered resources on the Lambda filesystem between invocations to reduce `GetResources` calls. | `bool` | `true` | |
+| metrics_file_cache_path | Directory for the metrics resource-tag cache files (typically Lambda ephemeral storage). | `string` | `/tmp` | |
+| metrics_file_cache_expiration | Maximum age of cache files before refresh. Go-style duration (e.g. `1h`, `30m`). | `string` | `1h` | |
+| tracing_mode | X-Ray tracing mode for the Lambda function. Valid values: `PassThrough`, `Active`. | `string` | `null` | |
+| firehose_role_arn | ARN of a user-defined IAM role for the metrics Firehose delivery stream to assume. When provided, the module does not create its own Firehose role. Only relevant when `telemetry_mode = "metrics"`. | `string` | `null` | |
+| create_firehose_role | Whether the module should create its own IAM role for the metrics Firehose delivery stream. Set to `false` and provide `firehose_role_arn` to bring your own role. Only relevant when `telemetry_mode = "metrics"`. | `bool` | `true` | |
+
+When `batch_metrics = true`, the module sets the Lambda environment variables `BATCH_METRICS=1` and `METRICS_BATCH_MAX_SIZE` to the provided value so that the shipper batches each Firehose ingested payload into a single export request.
+
+When `telemetry_mode = "metrics"`, the module also passes `METRICS_TAG_ENRICHMENT_ENABLED`, `CONTINUE_ON_RESOURCE_FAILURE`, `FILE_CACHE_ENABLED`, `FILE_CACHE_PATH`, and `FILE_CACHE_EXPIRATION` to the Lambda, matching the [coralogix-aws-shipper](https://github.com/coralogix/coralogix-aws-shipper) CloudFormation template. Tag enrichment and static labels on metrics require a shipper release that includes those features; pin `source_code_version` to an appropriate version when needed.
+
+For metrics shipped through this Firehose workflow, optional static labels use the same `custom_metadata` variable as logs (comma-separated `key=value` pairs).
 
 The include_metric_stream_filter example:
 ```
 module "coralogix_aws_shipper" "coralogix_firehose_metrics_private_link" {
   source = "coralogix/aws-shipper/coralogix"
   telemetry_mode = "metrics"
+  batch_metrics = true
+  metrics_batch_max_size = 4
   api_key = <your private key>
   application_name = "application_name"
   subsystem_name = "subsystem_name"
@@ -358,6 +417,165 @@ module "coralogix_aws_shipper" "coralogix_firehose_metrics_private_link" {
   ]
 }
 ```
+
+## Log Transformation (Starlark)
+
+The AWS Shipper supports custom log transformation using [Starlark](https://github.com/bazelbuild/starlark) scripts. You can unnest JSON arrays, filter logs, transform structure, and enrich logs with extra fields.
+
+> [!NOTE]
+> The full Starlark language specification — including syntax, data types, built-in functions, and operators — is available at:
+> **https://github.com/bazelbuild/starlark/blob/master/spec.md**
+
+The `starlark_script` variable accepts several formats. The shipper auto-detects the type:
+
+| Method | When to Use | Example |
+|--------|-------------|---------|
+| Inline (heredoc) | Short scripts, quick testing | `<<-EOF ... EOF` |
+| Local file | Version-controlled scripts, complex logic | `file("${path.module}/transform.star")` |
+| S3 path | Shared scripts across deployments | `s3://bucket/transform.star` |
+| HTTP/HTTPS URL | Public scripts, GitHub raw URLs | `https://...` |
+| Base64 | CI/CD pipelines, programmatic generation | `ZGVmIHRyYW5z...` |
+
+**Example: inline script (heredoc) – best for short scripts**
+```hcl
+starlark_script = <<-EOF
+  def transform(event):
+      if event.get("level") == "DEBUG":
+          return []
+      return [event]
+EOF
+```
+
+**Example: local file – best for version-controlled scripts**
+```hcl
+starlark_script = file("${path.module}/scripts/transform.star")
+```
+
+**Example: S3 – best for shared scripts across deployments**
+```hcl
+starlark_script = "s3://my-config-bucket/starlark/transform.star"
+```
+
+**Example: HTTP URL – best for public/shared scripts**
+```hcl
+starlark_script = "https://raw.githubusercontent.com/myorg/scripts/main/transform.star"
+```
+
+**Example: Base64 – best for CI/CD or programmatic generation**
+```hcl
+starlark_script = "ZGVmIHRyYW5zZm9ybShldmVudCk6CiAgICByZXR1cm4gW2V2ZW50XQ=="
+```
+
+Your script must define a `transform(event)` function that takes one argument (JSON object or string) and returns a list of events (can be empty).
+
+**Example: passthrough**
+```python
+def transform(event):
+    return [event]
+```
+
+**Example: filter out debug logs**
+```python
+def transform(event):
+    if event.get("level") == "DEBUG":
+        return []
+    return [event]
+```
+
+**Example: enrich with metadata**
+```python
+def transform(event):
+    event["source"] = "aws-shipper"
+    return [event]
+```
+
+**Shipper built-in functions:** `parse_json(str)`, `to_json(value)`, `print(msg)` (visible when LogLevel=DEBUG).
+
+For the complete Starlark language reference — including all built-in functions, operators, data types, and control flow — see the [Starlark language specification](https://github.com/bazelbuild/starlark/blob/master/spec.md).
+
+When `starlark_script` is empty, logs pass through unchanged.
+
+## Custom SNS Topic Policy Management
+
+Set `create_sns_topic_policy = false` to preserve existing SNS topic policies:
+
+```hcl
+module "coralogix_shipper" {
+  source = "coralogix/coralogix-aws-shipper/aws"
+  
+  create_sns_topic_policy = false
+  sns_topic_name         = "your-existing-sns-topic"
+  # ... other configuration
+}
+```
+
+### Required Permissions
+
+When `create_sns_topic_policy = false`, include this permission in your SNS topic policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "s3.amazonaws.com"
+      },
+      "Action": "SNS:Publish",
+      "Resource": "arn:aws:sns:REGION:ACCOUNT-ID:TOPIC-NAME",
+      "Condition": {
+        "ArnLike": {
+          "aws:SourceArn": "arn:aws:s3:::YOUR-S3-BUCKET-NAME"
+        }
+      }
+    }
+  ]
+}
+```
+
+**Note**: This only applies to S3-based integrations (S3, CloudTrail, VpcFlow, CloudFront, S3Csv). Direct SNS integration (`integration_type = "Sns"`) does not create SNS topic policies.
+
+## Custom SQS Queue Policy Management
+
+Set `create_sqs_queue_policy = false` to preserve existing SQS queue policies:
+
+```hcl
+module "coralogix_shipper" {
+  source = "coralogix/coralogix-aws-shipper/aws"
+
+  create_sqs_queue_policy = false
+  sqs_name               = "your-existing-sqs-queue"
+  # ... other configuration
+}
+```
+
+### Required Permissions
+
+When `create_sqs_queue_policy = false`, include this permission in your SQS queue policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "s3.amazonaws.com"
+      },
+      "Action": "SQS:SendMessage",
+      "Resource": "arn:aws:sqs:REGION:ACCOUNT-ID:QUEUE-NAME",
+      "Condition": {
+        "ArnLike": {
+          "aws:SourceArn": "arn:aws:s3:::YOUR-S3-BUCKET-NAME"
+        }
+      }
+    }
+  ]
+}
+```
+
+**Note**: This only applies to S3-based integrations (S3, CloudTrail, VpcFlow, CloudFront, S3Csv) when using SQS.
 
 ## Outputs
 

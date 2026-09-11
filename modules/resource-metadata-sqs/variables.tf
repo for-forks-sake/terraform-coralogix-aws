@@ -68,6 +68,12 @@ variable "crossaccount_config_aggregator" {
   default     = ""
 }
 
+variable "crossaccount_config_assume_role" {
+  description = "IAM role ARN in the account where AWS Config aggregator lives. If set, the collector will assume this role when querying Config (use when aggregator is in a different account)."
+  type        = string
+  default     = ""
+}
+
 variable "crossaccount_account_ids" {
   description = "The account IDs to collect metadata from, separated by commas (e.g. 123456789012,123456789013). Used only when crossaccount_mode is StaticIAM."
   type        = list(string)
@@ -140,6 +146,17 @@ variable "notification_email" {
   default     = ""
 }
 
+variable "sns_kms_key_arn" {
+  description = "Optional KMS key ARN (not an alias) to encrypt the Lambda failure-notification SNS topic. Leave null for no encryption. The key policy must allow sns.amazonaws.com and the Lambda execution role to use kms:Decrypt and kms:GenerateDataKey*."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.sns_kms_key_arn == null || can(regex("^arn:[^:]+:kms:[^:]+:[0-9]{12}:key/", var.sns_kms_key_arn))
+    error_message = "sns_kms_key_arn must be a KMS key ARN (arn:...:kms:...:key/...), not an alias."
+  }
+}
+
 variable "package_name" {
   description = "Package name for the Lambda function"
   type        = string
@@ -168,6 +185,16 @@ variable "excluded_ec2_resource_type" {
   description = "Is EC2 Resource Type Excluded?"
   type        = bool
   default     = false
+}
+
+variable "ec2_chunk_size" {
+  description = "Number of EC2 instances to process per batch when collecting metadata. Required by the collector Lambda."
+  type        = number
+  default     = 25
+  validation {
+    condition     = var.ec2_chunk_size >= 10 && var.ec2_chunk_size <= 40
+    error_message = "EC2 chunk size must be between 10 and 40."
+  }
 }
 
 variable "excluded_lambda_resource_type" {

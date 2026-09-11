@@ -13,9 +13,7 @@ resource "random_string" "this" {
   special = false
 }
 
-resource "random_string" "lambda_role" {
-  count = var.execution_role_name == null ? 1 : 0
-
+resource "random_string" "id" {
   length  = 6
   special = false
 }
@@ -60,7 +58,7 @@ resource "aws_iam_policy" "lambda_policy" {
       ],
 
       # Secrets Access Policy
-      each.value.store_api_key_in_secrets_manager == null || each.value.store_api_key_in_secrets_manager == true || local.api_key_is_arn ? [
+      local.needs_coralogix_api_key && (each.value.store_api_key_in_secrets_manager == null || each.value.store_api_key_in_secrets_manager == true || local.api_key_is_arn) ? [
         {
           Effect   = "Allow",
           Action   = ["secretsmanager:GetSecretValue"],
@@ -189,14 +187,66 @@ resource "aws_iam_policy" "lambda_policy" {
           Action   = ["kms:Decrypt"],
           Resource = [var.s3_bucket_kms_arn]
         }
-      ] : []
+      ] : [],
+
+      # SNS failure-notification topic KMS Policy
+      var.sns_kms_key_arn != null ? [
+        {
+          Effect   = "Allow",
+          Action   = ["kms:Decrypt", "kms:GenerateDataKey*"],
+          Resource = [var.sns_kms_key_arn]
+        }
+      ] : [],
+
+      # Starlark S3 Script Policy
+      startswith(var.starlark_script, "s3://") ? [
+        {
+          Effect   = "Allow",
+          Action   = ["s3:GetObject"],
+          Resource = ["${local.arn_prefix}:s3:::${local.starlark_s3_bucket}/*"]
+        }
+      ] : [],
+
+      # X-Ray tracing permissions (required when Active tracing is enabled)
+      var.tracing_mode == "Active" ? [
+        {
+          Effect   = "Allow"
+          Action   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords", "xray:GetSamplingRules", "xray:GetSamplingTargets"]
+          Resource = ["*"]
+        }
+      ] : [],
+
+      # Metrics stream tag enrichment (Resource Groups Tagging API + service reads used by YACE-style associator)
+      var.telemetry_mode == "metrics" && var.metrics_tag_enrichment_enabled ? [
+        {
+          Effect = "Allow"
+          Action = [
+            "tag:GetResources",
+            "cloudwatch:GetMetricData",
+            "cloudwatch:GetMetricStatistics",
+            "cloudwatch:ListMetrics",
+            "apigateway:GET",
+            "aps:ListWorkspaces",
+            "autoscaling:DescribeAutoScalingGroups",
+            "dms:DescribeReplicationInstances",
+            "dms:DescribeReplicationTasks",
+            "ec2:DescribeTransitGatewayAttachments",
+            "ec2:DescribeSpotFleetRequests",
+            "shield:ListProtections",
+            "storagegateway:ListGateways",
+            "storagegateway:ListTagsForResource",
+            "iam:ListAccountAliases",
+          ]
+          Resource = ["*"]
+        }
+      ] : [],
     )
   })
 }
 
 resource "aws_iam_role" "lambda_role" {
-  count = var.execution_role_name == null ? 1 : 0
-  name  = "Coralogix-lambda-role-${random_string.lambda_role[0].result}"
+  count = local.effective_create_role ? 1 : 0
+  name  = "Coralogix-lambda-role-${random_string.id.result}"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -215,13 +265,13 @@ resource "aws_iam_role" "lambda_role" {
 resource "aws_iam_role_policy_attachment" "attach_to_existing_role" {
   for_each = var.integration_info != null ? var.integration_info : local.integration_info
 
-  role       = var.execution_role_name != null ? var.execution_role_name : aws_iam_role.lambda_role[0].name
+  role       = local.lambda_role_name
   policy_arn = aws_iam_policy.lambda_policy[each.key].arn
 }
 
 resource "aws_iam_role_policy_attachment" "attach_msk_policy" {
   count      = var.msk_cluster_arn != null ? 1 : 0
-  role       = var.execution_role_name != null ? var.execution_role_name : aws_iam_role.lambda_role[0].name
+  role       = local.lambda_role_name
   policy_arn = data.aws_iam_policy.AWSLambdaMSKExecutionRole[0].arn
 }
 
@@ -232,7 +282,7 @@ module "lambda" {
   source                         = "terraform-aws-modules/lambda/aws"
   function_name                  = each.value.lambda_name == null ? module.locals[each.key].function_name : each.value.lambda_name
   description                    = "Send logs to Coralogix."
-  version                        = "7.2.0"
+  version                        = "8.1.2"
   handler                        = "bootstrap"
   runtime                        = var.runtime
   architectures                  = [var.cpu_arch]
@@ -243,26 +293,56 @@ module "lambda" {
   destination_on_failure         = var.notification_email != null ? aws_sns_topic.this[each.key].arn : null
   vpc_subnet_ids                 = var.subnet_ids
   vpc_security_group_ids         = var.security_group_ids
+  tracing_mode                   = var.tracing_mode
   dead_letter_target_arn         = var.enable_dlq ? aws_sqs_queue.DLQ[0].arn : null
   environment_variables = {
-    CORALOGIX_ENDPOINT = var.custom_domain != "" ? "https://ingress.${var.custom_domain}" : var.subnet_ids == null ? "https://ingress.${lookup(module.locals[each.key].coralogix_domains, var.coralogix_region, "EU1")}" : "https://ingress.private.${lookup(module.locals[each.key].coralogix_domains, var.coralogix_region, "EU1")}"
-    INTEGRATION_TYPE   = each.value.integration_type
-    RUST_LOG           = var.log_level
-    CORALOGIX_API_KEY  = !local.api_key_is_arn && (each.value.store_api_key_in_secrets_manager == null || each.value.store_api_key_in_secrets_manager == true) ? aws_secretsmanager_secret.coralogix_secret[each.key].arn : each.value.api_key
-    APP_NAME           = each.value.application_name
-    SUB_NAME           = each.value.subsystem_name
-    NEWLINE_PATTERN    = each.value.newline_pattern != null ? each.value.newline_pattern : null
-    BLOCKING_PATTERN   = var.blocking_pattern
-    SAMPLING           = tostring(var.sampling_rate)
-    ADD_METADATA       = var.add_metadata
-    CUSTOM_METADATA    = var.custom_metadata
-    CUSTOM_CSV_HEADER  = var.custom_csv_header
-    DLQ_ARN            = var.enable_dlq ? aws_sqs_queue.DLQ[0].arn : null
-    DLQ_RETRY_LIMIT    = var.enable_dlq ? var.dlq_retry_limit : null
-    DLQ_S3_BUCKET      = var.enable_dlq ? var.dlq_s3_bucket : null
-    DLQ_URL            = var.enable_dlq ? aws_sqs_queue.DLQ[0].url : null
-    ASSUME_ROLE_ARN    = var.lambda_assume_role_arn
-    TELEMETRY_MODE     = var.telemetry_mode
+    CORALOGIX_ENDPOINT = local.needs_coralogix_rest_endpoint ? (
+      var.custom_domain != "" ? "https://ingress.${var.custom_domain}" : (
+        var.subnet_ids == null
+        ? "https://ingress.${lookup(module.locals[each.key].coralogix_domains, var.coralogix_region, "EU1")}"
+        : "https://ingress.private.${lookup(module.locals[each.key].coralogix_domains, var.coralogix_region, "EU1")}"
+      )
+    ) : null
+    INTEGRATION_TYPE = each.value.integration_type
+    RUST_LOG         = var.log_level
+    CORALOGIX_API_KEY = local.needs_coralogix_api_key ? (
+      !local.api_key_is_arn && (each.value.store_api_key_in_secrets_manager == null || each.value.store_api_key_in_secrets_manager == true)
+      ? aws_secretsmanager_secret.coralogix_secret[each.key].arn
+      : each.value.api_key
+    ) : null
+    LOG_EXPORT_PROTOCOL            = var.telemetry_mode == "logs" ? var.log_export_protocol : null
+    OTLP_ENDPOINT                  = local.use_collector_otlp_logs ? var.otlp_endpoint : null
+    DISABLE_LOG_SEVERITY_DETECTION = var.telemetry_mode == "logs" ? tostring(var.disable_log_severity_detection) : null
+    CORALOGIX_DOMAIN = local.use_coralogix_otlp_logs ? (
+      var.custom_domain != ""
+      ? var.custom_domain
+      : lookup(module.locals[each.key].coralogix_domains, var.coralogix_region, "eu1.coralogix.com")
+    ) : null
+    APP_NAME                       = each.value.application_name
+    SUB_NAME                       = each.value.subsystem_name
+    NEWLINE_PATTERN                = each.value.newline_pattern != null ? each.value.newline_pattern : null
+    BLOCKING_PATTERN               = var.blocking_pattern
+    SAMPLING                       = tostring(var.sampling_rate)
+    ADD_METADATA                   = var.add_metadata
+    CUSTOM_METADATA                = var.custom_metadata
+    CUSTOM_CSV_HEADER              = var.custom_csv_header
+    DLQ_ARN                        = var.enable_dlq ? aws_sqs_queue.DLQ[0].arn : null
+    DLQ_RETRY_LIMIT                = var.enable_dlq ? var.dlq_retry_limit : null
+    DLQ_S3_BUCKET                  = var.enable_dlq ? var.dlq_s3_bucket : null
+    DLQ_URL                        = var.enable_dlq ? aws_sqs_queue.DLQ[0].url : null
+    ASSUME_ROLE_ARN                = var.lambda_assume_role_arn
+    TELEMETRY_MODE                 = var.telemetry_mode
+    BATCH_METRICS                  = var.telemetry_mode == "metrics" && var.batch_metrics ? "1" : null
+    METRICS_BATCH_MAX_SIZE         = var.telemetry_mode == "metrics" && var.batch_metrics ? tostring(var.metrics_batch_max_size) : null
+    METRICS_TAG_ENRICHMENT_ENABLED = var.telemetry_mode == "metrics" ? (var.metrics_tag_enrichment_enabled ? "true" : "false") : null
+    CONTINUE_ON_RESOURCE_FAILURE   = var.telemetry_mode == "metrics" ? (var.metrics_continue_on_resource_failure ? "true" : "false") : null
+    FILE_CACHE_ENABLED             = var.telemetry_mode == "metrics" ? (var.metrics_file_cache_enabled ? "true" : "false") : null
+    FILE_CACHE_PATH                = var.telemetry_mode == "metrics" ? var.metrics_file_cache_path : null
+    FILE_CACHE_EXPIRATION          = var.telemetry_mode == "metrics" ? var.metrics_file_cache_expiration : null
+    STARLARK_SCRIPT                = var.starlark_script != "" ? var.starlark_script : null
+    LOG_STREAM_FILTER              = var.log_stream_filter != "" ? var.log_stream_filter : null
+    ENABLE_AWS_FIPS                = var.govcloud_deployment ? (var.enable_aws_fips == null ? "true" : tostring(var.enable_aws_fips)) : null
+    AWS_USE_FIPS_ENDPOINT          = var.govcloud_deployment ? (var.aws_use_fips_endpoint == null ? "true" : tostring(var.aws_use_fips_endpoint)) : null
   }
   s3_existing_package = {
     bucket = var.custom_s3_bucket == "" ? "coralogix-serverless-repo-${data.aws_region.this.id}" : var.custom_s3_bucket
@@ -272,7 +352,7 @@ module "lambda" {
   create_current_version_allowed_triggers = false
   attach_policy_statements                = false
   create_role                             = false
-  lambda_role                             = var.execution_role_name != null ? data.aws_iam_role.LambdaExecutionRole[0].arn : aws_iam_role.lambda_role[0].arn
+  lambda_role                             = local.lambda_role_arn
   allowed_triggers = local.s3_bucket_names != toset([]) && local.sns_enable != true ? {
     for bucket in data.aws_s3_bucket.this : "AllowExecutionFromS3_${replace(bucket.bucket, ".", "_")}" => {
       principal  = "s3.amazonaws.com"
@@ -291,6 +371,19 @@ module "lambda" {
   } : {}
 
   tags = merge(var.tags, module.locals[each.key].tags)
+}
+
+check "direct_otlp_requires_credentials" {
+  assert {
+    condition = !local.use_coralogix_otlp_logs || (
+      alltrue([
+        for integration in values(local.integration_info) :
+        integration.api_key != null && integration.api_key != ""
+      ]) &&
+      (var.coralogix_region != "Custom" || var.custom_domain != "")
+    )
+    error_message = "Direct Coralogix OTLP requires api_key and either a non-Custom coralogix_region or custom_domain."
+  }
 }
 
 resource "aws_lambda_function_event_invoke_config" "invoke_on_failure" {
@@ -330,7 +423,7 @@ resource "aws_lambda_permission" "sns_lambda_permission" {
 }
 
 resource "aws_sns_topic_policy" "test" {
-  count  = local.sns_enable && var.integration_type != "Sns" ? 1 : 0
+  count  = local.sns_enable && var.integration_type != "Sns" && var.create_sns_topic_policy ? 1 : 0
   arn    = data.aws_sns_topic.sns_topic[count.index].arn
   policy = data.aws_iam_policy_document.topic[count.index].json
 }
@@ -339,7 +432,7 @@ resource "aws_sns_topic_policy" "test" {
 resource "aws_secretsmanager_secret" "coralogix_secret" {
   for_each = {
     for key, integration_info in var.integration_info != null ? var.integration_info : local.integration_info : key => integration_info
-    if !local.api_key_is_arn && (integration_info.store_api_key_in_secrets_manager == null || integration_info.store_api_key_in_secrets_manager == true)
+    if local.needs_coralogix_api_key && !local.api_key_is_arn && (integration_info.store_api_key_in_secrets_manager == null || integration_info.store_api_key_in_secrets_manager == true)
   }
   name        = "lambda/coralogix/${data.aws_region.this.id}/coralogix-aws-shipper/coralogix-${random_string.this[each.key].result}"
   description = "Coralogix Send Your Data key Secret"
@@ -352,7 +445,7 @@ resource "aws_secretsmanager_secret" "coralogix_secret" {
 resource "aws_secretsmanager_secret_version" "service_user" {
   for_each = {
     for key, integration_info in var.integration_info != null ? var.integration_info : local.integration_info : key => integration_info
-    if !local.api_key_is_arn && (integration_info.store_api_key_in_secrets_manager == null || integration_info.store_api_key_in_secrets_manager == true)
+    if local.needs_coralogix_api_key && !local.api_key_is_arn && (integration_info.store_api_key_in_secrets_manager == null || integration_info.store_api_key_in_secrets_manager == true)
   }
   depends_on    = [aws_secretsmanager_secret.coralogix_secret]
   secret_id     = aws_secretsmanager_secret.coralogix_secret[each.key].id
@@ -360,7 +453,7 @@ resource "aws_secretsmanager_secret_version" "service_user" {
 }
 
 resource "aws_vpc_endpoint" "secretsmanager" {
-  count               = (var.store_api_key_in_secrets_manager || local.api_key_is_arn) && var.subnet_ids != null && var.create_endpoint ? 1 : 0
+  count               = local.needs_coralogix_api_key && (var.store_api_key_in_secrets_manager || local.api_key_is_arn) && var.subnet_ids != null && var.create_endpoint ? 1 : 0
   vpc_id              = data.aws_subnet.subnet[0].vpc_id
   service_name        = "com.amazonaws.${data.aws_region.this.id}.secretsmanager"
   vpc_endpoint_type   = "Interface"
@@ -371,7 +464,7 @@ resource "aws_vpc_endpoint" "secretsmanager" {
 
 resource "aws_sqs_queue" "DLQ" {
   count                      = var.enable_dlq ? 1 : 0
-  name                       = "coralogix-aws-shipper-dlq-${random_string.lambda_role[0].result}"
+  name                       = "coralogix-aws-shipper-dlq-${random_string.id.result}"
   message_retention_seconds  = 1209600
   delay_seconds              = var.dlq_retry_delay
   visibility_timeout_seconds = var.timeout

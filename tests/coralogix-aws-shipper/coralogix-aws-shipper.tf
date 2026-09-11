@@ -2,7 +2,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.32"
+      version = ">= 6.0"
     }
   }
 }
@@ -22,13 +22,54 @@ module "s3" {
   s3_bucket_name   = "github-action-bucket-testing"
   integration_type = "S3"
 }
+
+module "s3-sqs-external-policy" {
+  source = "../../modules/coralogix-aws-shipper"
+
+  coralogix_region        = "EU1"
+  api_key                 = "{{ secrets.TESTING_PRIVATE_KEY }}"
+  application_name        = "s3-sqs"
+  subsystem_name          = "logs"
+  s3_bucket_name          = "github-action-bucket-testing"
+  sqs_name                = "github-action-sqs-testing"
+  integration_type        = "S3"
+  create_sqs_queue_policy = false
+  s3_notification         = false
+}
 module "cloudwatch" {
   source = "../../modules/coralogix-aws-shipper"
 
-  coralogix_region = "EU1"
-  api_key          = "{{ secrets.TESTING_PRIVATE_KEY }}"
-  application_name = "cloudwatch-logs"
-  subsystem_name   = "logs"
-  log_groups       = ["github-action-testing-log-stream"]
-  integration_type = "CloudWatch"
+  coralogix_region               = "EU1"
+  api_key                        = "{{ secrets.TESTING_PRIVATE_KEY }}"
+  application_name               = "cloudwatch-logs"
+  subsystem_name                 = "logs"
+  log_groups                     = ["github-action-testing-log-stream"]
+  integration_type               = "CloudWatch"
+  disable_log_severity_detection = true
+}
+
+module "metrics" {
+  source = "../../modules/coralogix-aws-shipper"
+
+  coralogix_region       = "EU1"
+  api_key                = "{{ secrets.TESTING_PRIVATE_KEY }}"
+  application_name       = "metrics"
+  subsystem_name         = "metrics"
+  s3_bucket_name         = "github-action-bucket-testing"
+  telemetry_mode         = "metrics"
+  batch_metrics          = true
+  metrics_batch_max_size = 2
+}
+
+module "metrics-byo-role" {
+  source = "../../modules/coralogix-aws-shipper"
+
+  coralogix_region     = "EU1"
+  api_key              = "{{ secrets.TESTING_PRIVATE_KEY }}"
+  application_name     = "metrics-byo-role"
+  subsystem_name       = "metrics"
+  s3_bucket_name       = "github-action-bucket-testing"
+  telemetry_mode       = "metrics"
+  create_firehose_role = false
+  firehose_role_arn    = "arn:aws:iam::123456789012:role/byo-firehose-role"
 }

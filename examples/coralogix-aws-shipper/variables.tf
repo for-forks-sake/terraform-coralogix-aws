@@ -77,6 +77,12 @@ variable "s3_bucket_kms_arn" {
   default     = null
 }
 
+variable "s3_notification" {
+  description = "Controls whether an aws_s3_bucket_notification resource should be created to send S3 events to the application-specific Lambda functions. Set to false to disable the notification."
+  type        = bool
+  default     = true
+}
+
 variable "cs_delimiter" {
   type        = string
   description = "The delimiter used in the CSV file to process This value is applied when the S3Csv integration type is selected"
@@ -190,6 +196,12 @@ variable "sqs_name" {
   default     = null
 }
 
+variable "create_sqs_queue_policy" {
+  description = "Whether to create and manage the SQS queue policy. Set to false if you want to manage the policy yourself and preserve existing permissions. See README for required permissions when using custom policy."
+  type        = bool
+  default     = true
+}
+
 # sns variables
 
 variable "sns_topic_name" {
@@ -298,6 +310,12 @@ variable "notification_email" {
   default     = null
 }
 
+variable "sns_kms_key_arn" {
+  description = "Optional KMS key ARN (not an alias) to encrypt the Lambda failure-notification SNS topic. Leave null for no encryption. The key policy must allow sns.amazonaws.com and the Lambda execution role to use kms:Decrypt and kms:GenerateDataKey*."
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   description = "A map of tags to add to all resources"
   type        = map(string)
@@ -366,10 +384,22 @@ variable "lambda_assume_role_arn" {
   type        = string
 }
 
+variable "execution_role_arn" {
+  default     = null
+  description = "(Optional) The ARN of a user-defined IAM role to use as the execution role for the Lambda function. When provided, this avoids data source lookups and preserves Terraform's dependency graph. Recommended over execution_role_name when the role is created in the same configuration."
+  type        = string
+}
+
 variable "execution_role_name" {
   default     = null
-  description = "The arn of a user defined role that will be used as the execution role for the lambda function. "
+  description = "(Deprecated) The name of a user-defined role that will be used as the execution role for the Lambda function. Use execution_role_arn instead to avoid dependency chain issues. This variable is deprecated and will be removed in a future version."
   type        = string
+}
+
+variable "create_execution_role" {
+  description = "Whether the module should create its own IAM role for the Lambda function. Set to false when providing your own role via execution_role_arn or execution_role_name."
+  type        = bool
+  default     = true
 }
 
 variable "reserved_concurrent_executions" {
@@ -384,6 +414,18 @@ variable "govcloud_deployment" {
   default     = false
 }
 
+variable "enable_aws_fips" {
+  description = "Controls the ENABLE_AWS_FIPS environment variable on the shipper Lambda, which switches the AWS SDK HTTP client to the AWS-LC FIPS-validated TLS provider. When govcloud_deployment is true, this defaults to true (FIPS 140-3 enabled). Set to false to explicitly disable. Has no effect when govcloud_deployment is false."
+  type        = bool
+  default     = null
+}
+
+variable "aws_use_fips_endpoint" {
+  description = "Controls the AWS_USE_FIPS_ENDPOINT environment variable on the shipper Lambda, routing AWS SDK calls to FIPS service endpoints. When govcloud_deployment is true, this defaults to true. Set to false to explicitly disable. Has no effect when govcloud_deployment is false."
+  type        = bool
+  default     = null
+}
+
 variable "telemetry_mode" {
   description = "The telemetry mode for the shipper, i.e metrics or logs"
   type        = string
@@ -394,6 +436,28 @@ variable "telemetry_mode" {
   }
 }
 
+variable "log_export_protocol" {
+  description = "Log delivery protocol when telemetry_mode is logs: coralogix_rest (default) or otlp_grpc. Ignored for metrics."
+  type        = string
+  default     = "coralogix_rest"
+  validation {
+    condition     = contains(["coralogix_rest", "otlp_grpc"], var.log_export_protocol)
+    error_message = "log_export_protocol must be one of: [coralogix_rest, otlp_grpc]."
+  }
+}
+
+variable "otlp_endpoint" {
+  description = "Optional Collector http:// or https:// origin for otlp_grpc. Empty selects direct Coralogix OTLP (uses coralogix_region/custom_domain + api_key). Non-empty selects unauthenticated Collector delivery."
+  type        = string
+  default     = ""
+}
+
+variable "disable_log_severity_detection" {
+  description = "Disable keyword-based severity detection for logs. When true, logs use protocol-level Info severity without modifying the original log body. Ignored for metrics."
+  type        = bool
+  default     = false
+}
+
 variable "include_metric_stream_filter" {
   description = "List of inclusive metric filters. If you specify this parameter, the stream sends only the conditional metric names from the metric namespaces that you specify here. Leave empty to send all metrics"
   type = list(object({
@@ -402,4 +466,16 @@ variable "include_metric_stream_filter" {
     })
   )
   default = []
+}
+
+variable "firehose_role_arn" {
+  description = "(Optional) ARN of a user-defined IAM role for the metrics Firehose delivery stream to assume. When provided, the module does not create its own Firehose role. Only relevant when telemetry_mode is metrics."
+  type        = string
+  default     = null
+}
+
+variable "create_firehose_role" {
+  description = "Whether the module should create its own IAM role for the metrics Firehose delivery stream. Set to false and provide firehose_role_arn to bring your own role. Only relevant when telemetry_mode is metrics."
+  type        = bool
+  default     = true
 }

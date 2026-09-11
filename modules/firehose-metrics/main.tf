@@ -1,9 +1,9 @@
 terraform {
-  required_version = ">= 1.6.0"
+  required_version = ">= 1.9.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = " < 6.0 , >= 5.0 "
+      version = ">= 6.0"
     }
   }
 }
@@ -43,6 +43,9 @@ locals {
   new_metric_stream_iam_name    = var.metric_streams_iam_custom_name != null ? var.metric_streams_iam_custom_name : "${var.firehose_stream}-cw-iam"
 
   arn_prefix = "arn:${data.aws_partition.current.partition}"
+
+  use_secrets_manager = var.api_key_secret_arn != null && var.api_key_secret_arn != ""
+  use_api_key_kms     = var.api_key_secret_kms_key_arn != null && var.api_key_secret_kms_key_arn != ""
 }
 
 data "aws_caller_identity" "current_identity" {}
@@ -60,14 +63,14 @@ resource "null_resource" "s3_bucket_copy" {
 
   provisioner "local-exec" {
     command = <<-EOF
-      curl -o bootstrap.zip https://cx-cw-metrics-tags-lambda-processor-eu-west-1.s3.eu-west-1.amazonaws.com/bootstrap.zip
-      aws s3 cp --region ${data.aws_region.current_region.name} ./bootstrap.zip s3://${var.custom_s3_bucket}
-      if [ -f bootstrap.zip ]; then
-        rm ./bootstrap.zip
+      curl -o firehose-metrics-transformer.zip https://coralogix-serverless-repo-eu-west-1.s3.eu-west-1.amazonaws.com/firehose-metrics-transformer.zip
+      aws s3 cp --region ${data.aws_region.current_region.id} ./firehose-metrics-transformer.zip s3://${var.custom_s3_bucket}/firehose-metrics-transformer.zip
+      if [ -f firehose-metrics-transformer.zip ]; then
+        rm ./firehose-metrics-transformer.zip
       else
-        echo "Couldn't find bootstrap.zip, skip deleting"
+        echo "Couldn't find firehose-metrics-transformer.zip, skip deleting"
       fi
-      
+
     EOF
   }
 }
@@ -173,11 +176,11 @@ resource "aws_iam_policy" "new_firehose_iam" {
                "kms:GenerateDataKey"
            ],
            "Resource": [
-               "${local.arn_prefix}:kms:${data.aws_region.current_region.name}:${data.aws_caller_identity.current_identity.account_id}:key/key-id"
+               "${local.arn_prefix}:kms:${data.aws_region.current_region.id}:${data.aws_caller_identity.current_identity.account_id}:key/key-id"
            ],
            "Condition": {
                "StringEquals": {
-                   "kms:ViaService": "s3.${data.aws_region.current_region.name}.amazonaws.com"
+                   "kms:ViaService": "s3.${data.aws_region.current_region.id}.amazonaws.com"
                },
                "StringLike": {
                    "kms:EncryptionContext:aws:s3:arn": "${local.s3_backup_bucket_arn}/prefix*"
@@ -192,7 +195,7 @@ resource "aws_iam_policy" "new_firehose_iam" {
                "kinesis:GetRecords",
                "kinesis:ListShards"
            ],
-           "Resource": "${local.arn_prefix}:kinesis:${data.aws_region.current_region.name}:${data.aws_caller_identity.current_identity.account_id}:stream/*"
+           "Resource": "${local.arn_prefix}:kinesis:${data.aws_region.current_region.id}:${data.aws_caller_identity.current_identity.account_id}:stream/*"
         },
         {
            "Effect": "Allow",
@@ -212,7 +215,24 @@ resource "aws_iam_policy" "new_firehose_iam" {
           ],
           "Resource": "${aws_lambda_function.lambda_processor[0].arn}:*"
         }
-        %{else}
+        %{endif}
+        %{if local.use_secrets_manager},
+        {
+          "Effect": "Allow",
+          "Action": [
+              "secretsmanager:GetSecretValue"
+          ],
+          "Resource": "${var.api_key_secret_arn}"
+        }
+        %{endif}
+        %{if local.use_secrets_manager && local.use_api_key_kms},
+        {
+          "Effect": "Allow",
+          "Action": [
+              "kms:Decrypt"
+          ],
+          "Resource": "${var.api_key_secret_kms_key_arn}"
+        }
         %{endif}
     ]
 }
@@ -272,13 +292,25 @@ resource "aws_iam_role_policy" "new_lambda_iam" {
               "dms:DescribeReplicationTasks",
               "ec2:DescribeTransitGatewayAttachments",
               "ec2:DescribeSpotFleetRequests",
+              "shield:ListProtections",
               "storagegateway:ListGateways",
-              "storagegateway:ListTagsForResource"
+              "storagegateway:ListTagsForResource",
+              "iam:ListAccountAliases"
           ],
           "Effect": "Allow",
           "Resource": "*",
           "Sid": ""
       },
+      %{if var.cross_account_enabled}
+      {
+          "Action": [
+              "sts:AssumeRole"
+          ],
+          "Effect": "Allow",
+          "Resource": ${jsonencode(values(var.cross_account_roles))},
+          "Sid": ""
+      },
+      %{endif}
       {
           "Action": [
               "logs:PutLogEvents",
@@ -304,12 +336,12 @@ resource "aws_cloudwatch_log_group" "loggroup" {
 resource "aws_lambda_function" "lambda_processor" {
   depends_on    = [null_resource.s3_bucket_copy]
   count         = var.lambda_processor_enable ? 1 : 0
-  s3_bucket     = coalesce(var.custom_s3_bucket, "cx-cw-metrics-tags-lambda-processor-${data.aws_region.current_region.name}")
-  s3_key        = "bootstrap.zip"
+  s3_bucket     = coalesce(var.custom_s3_bucket, "coralogix-serverless-repo-${data.aws_region.current_region.id}")
+  s3_key        = "firehose-metrics-transformer.zip"
   function_name = local.lambda_processor_name
   role          = local.lambda_processor_iam_role_arn
   handler       = "bootstrap"
-  runtime       = "provided.al2"
+  runtime       = "provided.al2023"
   timeout       = "60"
   memory_size   = 512
   architectures = ["arm64"]
@@ -317,9 +349,13 @@ resource "aws_lambda_function" "lambda_processor" {
 
   environment {
     variables = {
-      FILE_CACHE_PATH = "/tmp"
+      FILE_CACHE_PATH       = "/tmp"
+      STATIC_LABELS         = jsonencode(var.static_labels)
+      CROSS_ACCOUNT_ENABLED = tostring(var.cross_account_enabled)
+      CROSS_ACCOUNT_ROLES   = jsonencode(var.cross_account_roles)
     }
   }
+
 }
 
 resource "aws_kinesis_firehose_delivery_stream" "coralogix_stream_metrics" {
@@ -330,12 +366,21 @@ resource "aws_kinesis_firehose_delivery_stream" "coralogix_stream_metrics" {
   http_endpoint_configuration {
     url                = local.endpoint_url
     name               = "Coralogix"
-    access_key         = var.api_key
+    access_key         = local.use_secrets_manager ? null : var.api_key
     buffering_size     = 1
     buffering_interval = 60
     s3_backup_mode     = "FailedDataOnly"
     role_arn           = local.firehose_iam_role_arn
     retry_duration     = 300
+
+    dynamic "secrets_manager_configuration" {
+      for_each = local.use_secrets_manager ? [1] : []
+      content {
+        enabled    = true
+        secret_arn = var.api_key_secret_arn
+        role_arn   = local.firehose_iam_role_arn
+      }
+    }
 
     s3_configuration {
       role_arn           = local.firehose_iam_role_arn

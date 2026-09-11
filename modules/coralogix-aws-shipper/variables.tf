@@ -53,6 +53,12 @@ variable "sampling_rate" {
   default     = 1
 }
 
+variable "starlark_script" {
+  description = "Starlark transformation script. Accepts raw script content (use heredoc), S3 path (s3://bucket/key), HTTP/HTTPS URL, base64-encoded script, or use file() for local files. Must define a transform(event) function. Leave empty to disable. For the Starlark language specification, see https://github.com/bazelbuild/starlark/blob/master/spec.md"
+  type        = string
+  default     = ""
+}
+
 variable "s3_bucket_name" {
   description = "The name of the S3 bucket to watch, this accepts also a comma separated list of bucket names."
   type        = string
@@ -75,6 +81,12 @@ variable "s3_bucket_kms_arn" {
   description = "The AWS ARN of the KMS key used to encrypt/decrypt objects in the specified S3 bucket. If provided, the Lambda policy will include permissions to decrypt using this key."
   type        = string
   default     = null
+}
+
+variable "s3_notification" {
+  description = "Controls whether an aws_s3_bucket_notification resource should be created to send S3 events to the application-specific Lambda functions. Set to false to disable the notification."
+  type        = bool
+  default     = true
 }
 
 variable "cs_delimiter" {
@@ -120,6 +132,18 @@ variable "log_group_prefix" {
   description = "Prefix of the CloudWatch log groups that will trigger the lambda"
   type        = list(string)
   default     = null
+}
+
+variable "log_group_filter_pattern" {
+  description = "The filter pattern to use for the CloudWatch log subscription filter. Use this to filter which logs are sent to Coralogix. An empty string matches all log events."
+  type        = string
+  default     = ""
+}
+
+variable "log_stream_filter" {
+  description = "A regex pattern to filter CloudWatch log streams by name. Only events from log streams matching this pattern will be shipped. Leave empty to ship all streams. Example: '^main/' to only ship logs from streams starting with 'main/'."
+  type        = string
+  default     = ""
 }
 
 # kinesis variables
@@ -216,6 +240,18 @@ variable "sns_topic_filter_policy_scope" {
   default     = null
 }
 
+variable "create_sns_topic_policy" {
+  description = "Whether to create and manage the SNS topic policy. Set to false if you want to manage the policy yourself and preserve existing permissions. See README for required permissions when using custom policy."
+  type        = bool
+  default     = true
+}
+
+variable "create_sqs_queue_policy" {
+  description = "Whether to create and manage the SQS queue policy. Set to false if you want to manage the policy yourself and preserve existing permissions. See README for required permissions when using custom policy."
+  type        = bool
+  default     = true
+}
+
 # vpc variables
 
 variable "subnet_ids" {
@@ -310,6 +346,17 @@ variable "notification_email" {
   default     = null
 }
 
+variable "sns_kms_key_arn" {
+  description = "Optional KMS key ARN (not an alias) to encrypt the Lambda failure-notification SNS topic. Leave null for no encryption. The key policy must allow sns.amazonaws.com and the Lambda execution role to use kms:Decrypt and kms:GenerateDataKey*."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.sns_kms_key_arn == null || can(regex("^arn:[^:]+:kms:[^:]+:[0-9]{12}:key/", var.sns_kms_key_arn))
+    error_message = "sns_kms_key_arn must be a KMS key ARN (arn:...:kms:...:key/...), not an alias."
+  }
+}
+
 variable "tags" {
   description = "A map of tags to add to all resources"
   type        = map(string)
@@ -326,6 +373,18 @@ variable "govcloud_deployment" {
   description = "Enable if you deploy the integration in govcloud"
   type        = bool
   default     = false
+}
+
+variable "enable_aws_fips" {
+  description = "Controls the ENABLE_AWS_FIPS environment variable on the shipper Lambda, which switches the AWS SDK HTTP client to the AWS-LC FIPS-validated TLS provider. When govcloud_deployment is true, this defaults to true (FIPS 140-3 enabled). Set to false to explicitly disable. Has no effect when govcloud_deployment is false."
+  type        = bool
+  default     = null
+}
+
+variable "aws_use_fips_endpoint" {
+  description = "Controls the AWS_USE_FIPS_ENDPOINT environment variable on the shipper Lambda, routing AWS SDK calls to FIPS service endpoints. When govcloud_deployment is true, this defaults to true. Set to false to explicitly disable. Has no effect when govcloud_deployment is false."
+  type        = bool
+  default     = null
 }
 
 variable "lambda_name" {
@@ -384,10 +443,22 @@ variable "lambda_assume_role_arn" {
   type        = string
 }
 
+variable "execution_role_arn" {
+  default     = null
+  description = "(Optional) The ARN of a user-defined IAM role to use as the execution role for the Lambda function. When provided, this avoids data source lookups and preserves Terraform's dependency graph. Recommended over execution_role_name when the role is created in the same configuration."
+  type        = string
+}
+
 variable "execution_role_name" {
   default     = null
-  description = "The arn of a user defined role that will be used as the execution role for the lambda function."
+  description = "(Deprecated) The name of a user-defined role that will be used as the execution role for the Lambda function. Use execution_role_arn instead to avoid dependency chain issues. This variable is deprecated and will be removed in a future version."
   type        = string
+}
+
+variable "create_execution_role" {
+  description = "Whether the module should create its own IAM role for the Lambda function. Automatically set to false when execution_role_arn or execution_role_name is provided."
+  type        = bool
+  default     = true
 }
 
 variable "reserved_concurrent_executions" {
@@ -407,6 +478,44 @@ variable "telemetry_mode" {
   }
 }
 
+variable "log_export_protocol" {
+  description = "Log delivery protocol when telemetry_mode is logs: coralogix_rest (default) or otlp_grpc. Ignored for metrics."
+  type        = string
+  default     = "coralogix_rest"
+  validation {
+    condition     = contains(["coralogix_rest", "otlp_grpc"], var.log_export_protocol)
+    error_message = "log_export_protocol must be one of: [coralogix_rest, otlp_grpc]."
+  }
+}
+
+variable "otlp_endpoint" {
+  description = "Optional Collector http:// or https:// origin for otlp_grpc. Empty selects direct Coralogix OTLP (uses coralogix_region/custom_domain + api_key). Non-empty selects unauthenticated Collector delivery."
+  type        = string
+  default     = ""
+}
+
+variable "disable_log_severity_detection" {
+  description = "Disable keyword-based severity detection for logs. When true, logs use protocol-level Info severity without modifying the original log body. Ignored for metrics."
+  type        = bool
+  default     = false
+}
+
+variable "batch_metrics" {
+  description = "Enable batching of OpenTelemetry metric messages when telemetry_mode is set to metrics."
+  type        = bool
+  default     = false
+}
+
+variable "metrics_batch_max_size" {
+  description = "Maximum size in megabytes for the aggregated encoded protobuf payload before it is flushed and sent. Applies only when batch_metrics is true."
+  type        = number
+  default     = 4
+  validation {
+    condition     = var.metrics_batch_max_size > 0
+    error_message = "metrics_batch_max_size must be greater than 0."
+  }
+}
+
 variable "include_metric_stream_filter" {
   description = "List of inclusive metric filters. If you specify this parameter, the stream sends only the conditional metric names from the metric namespaces that you specify here. Leave empty to send all metrics"
   type = list(object({
@@ -415,4 +524,56 @@ variable "include_metric_stream_filter" {
     })
   )
   default = []
+}
+
+variable "metrics_tag_enrichment_enabled" {
+  description = "When telemetry_mode is metrics, call the AWS Resource Groups Tagging API to attach resource tags to streamed CloudWatch metrics. When true, the Lambda execution policy includes the required IAM actions. Set false if the function cannot reach the tagging API (for example from a restrictive VPC)."
+  type        = bool
+  default     = false
+}
+
+variable "metrics_continue_on_resource_failure" {
+  description = "When telemetry_mode is metrics, if true, tagging or resource-discovery errors cause the shipper to skip AWS tags for affected data and still deliver metrics. If false, the invocation fails instead."
+  type        = bool
+  default     = true
+}
+
+variable "metrics_file_cache_enabled" {
+  description = "When telemetry_mode is metrics, persist a per-namespace cache of discovered resources under metrics_file_cache_path on the Lambda filesystem between invocations to reduce GetResources traffic."
+  type        = bool
+  default     = true
+}
+
+variable "metrics_file_cache_path" {
+  description = "Directory for metrics tag-enrichment resource cache files (typically Lambda ephemeral storage, e.g. /tmp)."
+  type        = string
+  default     = "/tmp"
+}
+
+variable "metrics_file_cache_expiration" {
+  description = "Maximum age of metrics resource cache files before refresh. Go-style duration (e.g. 1h, 30m), matching the shipper's ParseDuration."
+  type        = string
+  default     = "1h"
+}
+
+variable "tracing_mode" {
+  description = "X-Ray tracing mode for the Lambda function. Valid values: PassThrough, Active. Defaults to null (no explicit tracing config, AWS default applies)."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.tracing_mode == null ? true : contains(["PassThrough", "Active"], var.tracing_mode)
+    error_message = "Valid values for tracing_mode are: [PassThrough, Active]."
+  }
+}
+
+variable "firehose_role_arn" {
+  description = "(Optional) ARN of a user-defined IAM role for the metrics Firehose delivery stream to assume. When provided, the module does not create its own Firehose role. Only relevant when telemetry_mode is metrics."
+  type        = string
+  default     = null
+}
+
+variable "create_firehose_role" {
+  description = "Whether the module should create its own IAM role for the metrics Firehose delivery stream. Set to false and provide firehose_role_arn to bring your own role. Only relevant when telemetry_mode is metrics."
+  type        = bool
+  default     = true
 }

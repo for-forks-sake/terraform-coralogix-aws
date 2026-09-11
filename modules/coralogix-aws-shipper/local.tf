@@ -58,4 +58,39 @@ locals {
 
   arn_prefix      = "arn:${data.aws_partition.current.partition}"
   s3_bucket_names = var.s3_bucket_name != null ? toset(split(",", var.s3_bucket_name)) : toset([])
+
+  # Whether the module should create its own IAM role.
+  # The create_execution_role flag lets callers short-circuit the &&
+  # chain so count stays known at plan time even when execution_role_arn
+  # is computed from another resource (unknown until apply).
+  effective_create_role = var.create_execution_role && var.execution_role_arn == null && var.execution_role_name == null
+
+  # Precedence: execution_role_arn > execution_role_name > module-created role
+  lambda_role_arn = var.execution_role_arn != null ? var.execution_role_arn : (
+    var.execution_role_name != null ? data.aws_iam_role.LambdaExecutionRole[0].arn : aws_iam_role.lambda_role[0].arn
+  )
+
+  lambda_role_name = var.execution_role_arn != null ? element(split("/", var.execution_role_arn), length(split("/", var.execution_role_arn)) - 1) : (
+    var.execution_role_name != null ? data.aws_iam_role.LambdaExecutionRole[0].name : aws_iam_role.lambda_role[0].name
+  )
+
+  # Firehose (metrics) delivery role. Callers can bring their own role via
+  # firehose_role_arn; otherwise the module creates one when telemetry_mode is
+  # metrics. create_firehose_role lets callers short-circuit creation.
+  effective_create_firehose_role = var.telemetry_mode == "metrics" && var.create_firehose_role && var.firehose_role_arn == null
+
+  firehose_metrics_role_arn = var.firehose_role_arn != null ? var.firehose_role_arn : (
+    local.effective_create_firehose_role ? aws_iam_role.s3_firehose_metrics_role[0].arn : null
+  )
+
+  # Parse Starlark S3 script bucket when using s3:// format
+  starlark_s3_bucket = startswith(var.starlark_script, "s3://") ? regex("^s3://([^/]+)", var.starlark_script)[0] : null
+
+  # Log export routes (parity with coralogix-aws-shipper CloudFormation conditions)
+  use_coralogix_rest_logs       = var.telemetry_mode == "logs" && var.log_export_protocol == "coralogix_rest"
+  use_otlp_grpc_logs            = var.telemetry_mode == "logs" && var.log_export_protocol == "otlp_grpc"
+  use_collector_otlp_logs       = local.use_otlp_grpc_logs && var.otlp_endpoint != ""
+  use_coralogix_otlp_logs       = local.use_otlp_grpc_logs && var.otlp_endpoint == ""
+  needs_coralogix_api_key       = var.telemetry_mode == "metrics" || local.use_coralogix_rest_logs || local.use_coralogix_otlp_logs
+  needs_coralogix_rest_endpoint = var.telemetry_mode == "metrics" || local.use_coralogix_rest_logs
 }

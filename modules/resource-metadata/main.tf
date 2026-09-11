@@ -14,6 +14,11 @@ locals {
     License  = "Apache-2.0"
   }
 
+  sns_kms_key_resource = coalesce(
+    var.sns_kms_key_arn,
+    "arn:${data.aws_partition.current.partition}:kms:${data.aws_region.this.id}:${data.aws_caller_identity.current.account_id}:key/00000000-0000-0000-0000-000000000000"
+  )
+
   # Base environment variables (common to both scenarios)
   base_environment_variables = {
     CORALOGIX_METADATA_URL               = lookup(local.coralogix_regions, var.coralogix_region, "Europe")
@@ -54,7 +59,7 @@ data "aws_partition" "current" {}
 
 module "eventbridge" {
   source  = "terraform-aws-modules/eventbridge/aws"
-  version = "3.17.1"
+  version = "4.0.0"
 
   create_bus  = false
   create_role = false
@@ -91,12 +96,12 @@ resource "null_resource" "s3_bucket" {
 module "lambda" {
   depends_on             = [null_resource.s3_bucket]
   source                 = "terraform-aws-modules/lambda/aws"
-  version                = "3.2.1"
+  version                = "8.1.2"
   function_name          = local.function_name
   layers                 = var.secret_manager_enabled ? [var.layer_arn] : []
   description            = "Send metadata to Coralogix."
   handler                = "index.handler"
-  runtime                = "nodejs20.x"
+  runtime                = "nodejs22.x"
   architectures          = [var.architecture]
   memory_size            = var.memory_size
   timeout                = var.timeout
@@ -104,10 +109,9 @@ module "lambda" {
   destination_on_failure = aws_sns_topic.this.arn
   environment_variables  = local.environment_variables
   s3_existing_package = {
-    bucket = var.custom_s3_bucket == "" ? "coralogix-serverless-repo-${data.aws_region.this.name}" : var.custom_s3_bucket
+    bucket = var.custom_s3_bucket == "" ? "coralogix-serverless-repo-${data.aws_region.this.id}" : var.custom_s3_bucket
     key    = "${var.package_name}.zip"
   }
-  policy_path                             = "/coralogix/"
   role_path                               = "/coralogix/"
   role_name                               = "${local.function_name}-Role"
   role_description                        = "Role for ${local.function_name} Lambda Function."
@@ -130,6 +134,12 @@ module "lambda" {
         "lambda:GetPolicy"
       ]
       resources = ["*"]
+    },
+    sns_kms = {
+      sid       = "SnsKms"
+      effect    = "Allow"
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey*"]
+      resources = [local.sns_kms_key_resource]
     }
   }
   allowed_triggers = {
@@ -143,15 +153,16 @@ module "lambda" {
 }
 
 resource "aws_sns_topic" "this" {
-  name_prefix  = "${local.function_name}-Failure"
-  display_name = "${local.function_name}-Failure"
-  tags         = merge(var.tags, local.tags)
+  name_prefix       = "${local.function_name}-Failure"
+  display_name      = "${local.function_name}-Failure"
+  kms_master_key_id = var.sns_kms_key_arn
+  tags              = merge(var.tags, local.tags)
 }
 
 resource "aws_secretsmanager_secret" "private_key_secret" {
   count       = var.secret_manager_enabled && var.create_secret ? 1 : 0
   depends_on  = [module.lambda]
-  name        = "lambda/coralogix/${data.aws_region.this.name}/${local.function_name}"
+  name        = "lambda/coralogix/${data.aws_region.this.id}/${local.function_name}"
   description = "Coralogix Send Your Data key Secret"
 }
 
@@ -182,7 +193,7 @@ resource "aws_iam_policy" "secret_access_policy" {
           "secretsmanager:UpdateSecret"
         ]
         Resource = var.create_secret ? [aws_secretsmanager_secret.private_key_secret[0].arn] : [
-          startswith(var.private_key, "arn:${data.aws_partition.current.partition}:secretsmanager:") ? var.private_key : "arn:${data.aws_partition.current.partition}:secretsmanager:${data.aws_region.this.name}:${data.aws_caller_identity.current.account_id}:secret:${var.private_key}*"
+          startswith(var.private_key, "arn:${data.aws_partition.current.partition}:secretsmanager:") ? var.private_key : "arn:${data.aws_partition.current.partition}:secretsmanager:${data.aws_region.this.id}:${data.aws_caller_identity.current.account_id}:secret:${var.private_key}*"
         ]
       }
     ]

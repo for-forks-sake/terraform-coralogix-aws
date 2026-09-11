@@ -16,6 +16,13 @@ locals {
   # Determine if we need to create IAM role
   create_iam_role = var.task_execution_role_arn == null
 
+  # Determine which task role to use
+  # Priority: 1. User-provided role, 2. Auto-created S3 task role
+  # A minimal task role with S3 read permissions is auto-created if no custom role is provided
+  task_role_arn = var.task_role_arn != null ? var.task_role_arn : (
+    aws_iam_role.otel_task_role_s3[0].arn
+  )
+
   # Determine which image to use (custom image or Coralogix image with version)
   use_custom_image = var.custom_image != null
   container_image  = local.use_custom_image ? var.custom_image : "coralogixrepo/coralogix-otel-collector:${var.image_version}"
@@ -156,6 +163,47 @@ resource "aws_iam_role_policy" "task_execution_role_cloudmap_policy" {
   })
 }
 
+# IAM Role for task runtime S3 access (only created when no custom task role provided)
+# This is a minimal role with only S3 read permissions for the container runtime
+resource "aws_iam_role" "otel_task_role_s3" {
+  count = var.task_role_arn == null ? 1 : 0
+  name  = "${local.name}-${random_string.id.result}-task-role-s3"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
+  tags = local.tags
+}
+
+resource "aws_iam_role_policy" "otel_task_role_s3_s3_policy" {
+  count = var.task_role_arn == null ? 1 : 0
+  name  = "S3ReadAccess"
+  role  = aws_iam_role.otel_task_role_s3[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:GetObjectVersion"
+        ]
+        Resource = "arn:aws:s3:::${var.s3_config_bucket}/*"
+      }
+    ]
+  })
+}
+
 # Agent Task Definition (only for tail sampling)
 resource "aws_ecs_task_definition" "agent" {
   count                    = var.deployment_type == "tail-sampling" ? 1 : 0
@@ -165,7 +213,7 @@ resource "aws_ecs_task_definition" "agent" {
   requires_compatibilities = ["EC2"]
   network_mode             = "host"
   execution_role_arn       = local.execution_role_arn
-  task_role_arn            = local.execution_role_arn
+  task_role_arn            = local.task_role_arn
 
   volume {
     name      = "hostfs"
@@ -219,7 +267,7 @@ resource "aws_ecs_task_definition" "agent" {
         value : local.coralogix_domain
       },
       {
-        name : "PRIVATE_KEY"
+        name : "CORALOGIX_PRIVATE_KEY"
         value : var.api_key
       },
       {
@@ -229,11 +277,15 @@ resource "aws_ecs_task_definition" "agent" {
       {
         name : "SUB_SYS"
         value : var.default_subsystem_name
+      },
+      {
+        name : "MY_POD_IP"
+        value : "0.0.0.0"
       }
     ],
     command : [
       "--config",
-      "s3://${var.s3_config_bucket}.s3.${data.aws_region.current.name}.amazonaws.com/${var.agent_s3_config_key}"
+      "s3://${var.s3_config_bucket}.s3.${data.aws_region.current.id}.amazonaws.com/${var.agent_s3_config_key}"
     ],
     healthCheck : var.health_check_enabled ? {
       command : ["/healthcheck"]
@@ -256,14 +308,14 @@ resource "aws_ecs_task_definition" "gateway" {
   requires_compatibilities = ["EC2"]
   network_mode             = "awsvpc"
   execution_role_arn       = local.execution_role_arn
-  task_role_arn            = local.execution_role_arn
+  task_role_arn            = local.task_role_arn
 
   container_definitions = jsonencode([{
     Name : "coralogix-otel-gateway"
     Image : local.container_image
     Command : [
       "--config",
-      "s3://${var.s3_config_bucket}.s3.${data.aws_region.current.name}.amazonaws.com/${var.gateway_s3_config_key}"
+      "s3://${var.s3_config_bucket}.s3.${data.aws_region.current.id}.amazonaws.com/${var.gateway_s3_config_key}"
     ]
     Cpu : 0
     Memory : var.memory
@@ -300,7 +352,7 @@ resource "aws_ecs_task_definition" "gateway" {
         Value : local.coralogix_domain
       },
       {
-        Name : "PRIVATE_KEY"
+        Name : "CORALOGIX_PRIVATE_KEY"
         Value : var.api_key
       },
       {
@@ -310,6 +362,10 @@ resource "aws_ecs_task_definition" "gateway" {
       {
         Name : "SUB_SYS"
         Value : var.default_subsystem_name
+      },
+      {
+        Name : "MY_POD_IP"
+        Value : "0.0.0.0"
       }
     ]
 
@@ -325,7 +381,7 @@ resource "aws_ecs_task_definition" "gateway" {
       LogDriver : "awslogs"
       Options : {
         "awslogs-group" : "/ecs/opentelemetry-gateway"
-        "awslogs-region" : data.aws_region.current.name
+        "awslogs-region" : data.aws_region.current.id
         "awslogs-stream-prefix" : "ecs"
         "mode" : "non-blocking"
         "awslogs-create-group" : "true"
@@ -344,14 +400,14 @@ resource "aws_ecs_task_definition" "receiver" {
   requires_compatibilities = ["EC2"]
   network_mode             = "awsvpc"
   execution_role_arn       = local.execution_role_arn
-  task_role_arn            = local.execution_role_arn
+  task_role_arn            = local.task_role_arn
 
   container_definitions = jsonencode([{
     Name : "coralogix-otel-receiver"
     Image : local.container_image
     Command : [
       "--config",
-      "s3://${var.s3_config_bucket}.s3.${data.aws_region.current.name}.amazonaws.com/${var.receiver_s3_config_key}"
+      "s3://${var.s3_config_bucket}.s3.${data.aws_region.current.id}.amazonaws.com/${var.receiver_s3_config_key}"
     ]
     Cpu : 0
     Memory : var.memory
@@ -388,7 +444,7 @@ resource "aws_ecs_task_definition" "receiver" {
         Value : local.coralogix_domain
       },
       {
-        Name : "PRIVATE_KEY"
+        Name : "CORALOGIX_PRIVATE_KEY"
         Value : var.api_key
       },
       {
@@ -398,6 +454,10 @@ resource "aws_ecs_task_definition" "receiver" {
       {
         Name : "SUB_SYS"
         Value : var.default_subsystem_name
+      },
+      {
+        Name : "MY_POD_IP"
+        Value : "0.0.0.0"
       }
     ]
 
@@ -413,7 +473,7 @@ resource "aws_ecs_task_definition" "receiver" {
       LogDriver : "awslogs"
       Options : {
         "awslogs-group" : "/ecs/opentelemetry-receiver"
-        "awslogs-region" : data.aws_region.current.name
+        "awslogs-region" : data.aws_region.current.id
         "awslogs-stream-prefix" : "ecs"
         "mode" : "non-blocking"
         "awslogs-create-group" : "true"
